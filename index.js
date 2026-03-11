@@ -18,7 +18,16 @@ const path = require('path');
 const client = new Client({
 intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent,],}); require('dotenv').config();
 const { createCanvas, loadImage , GlobalFonts } = require('@napi-rs/canvas');
+const express = require("express");
+const app = express();
 
+app.get("/", (req, res) => {
+  res.send("Bot is running");
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log("Server running");
+});
 // سجل Cairo-Regular
 GlobalFonts.registerFromPath(
   path.join(__dirname, "assets/fonts/Cairo-Regular.ttf"),
