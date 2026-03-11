@@ -349,6 +349,10 @@ function createUIRouter(client) {
 // انشئ الراوتر مرّة واحدة اعلى الملف
 const ui = createUIRouter(client);
 
+ui.messageExact("تحويل", handleTransferMessage);
+ui.selectExact("bank_transfer_select_user", handleTransferSelectUser);
+ui.buttonPrefix("bank_transfer_key_", handleTransferKeys);
+
 // ===== Solo Bet Flow =====
 ui.buttonExact("hit", handleMultiplayerBlackjackInteraction);
 ui.buttonExact("stand", handleMultiplayerBlackjackInteraction);
@@ -6412,7 +6416,7 @@ async function handleTextGameShortcut(msg, gameId) {
 
 
 /******************************************
- * اوامر المحفظة والتحويل — عبر الراوتر
+ * اوامر المحفظة والتحويل — عبر الراوتر (تفاعلي + صور)
  ******************************************/
 
 // تحميل الافاتار/الرسم كما هو
@@ -6420,6 +6424,7 @@ async function loadUserAvatar(user) {
   const url = user.displayAvatarURL({ extension: "png", size: 256 });
   return await loadImage(url);
 }
+
 function drawCircularImage(ctx, img, x, y, radius) {
   const size = radius * 2;
   ctx.save();
@@ -6430,6 +6435,7 @@ function drawCircularImage(ctx, img, x, y, radius) {
   ctx.drawImage(img, x - radius, y - radius, size, size);
   ctx.restore();
 }
+
 function drawText(ctx, text, x, y, font = "100px", color = "#b0d4eb", align = "center") {
   ctx.font = font;
   ctx.fillStyle = color;
@@ -6437,10 +6443,10 @@ function drawText(ctx, text, x, y, font = "100px", color = "#b0d4eb", align = "c
   ctx.fillText(text, x, y);
 }
 
-// امر "رصيد"
+// امر "رصيد" (نفس كودك مع الصورة)
 async function handleWalletMessage(msg) {
   const balance = await getBalance(msg.author.id);
-  const background = await loadImage( path.join(__dirname, "صوره المحفظه.png"));
+  const background = await loadImage(path.join(__dirname, "صوره المحفظه.png"));
   const avatarImage = await loadUserAvatar(msg.author);
 
   const canvas = createCanvas(background.width, background.height);
@@ -6456,49 +6462,261 @@ async function handleWalletMessage(msg) {
   return msg.reply({ files: [attachment] });
 }
 
-// امر "تحويل @شخص مبلغ"
+// ==========================================
+// نظام التحويل التفاعلي المدمج
+// ==========================================
+const transferState = new Map();
+
+function buildTransferControls(options) {
+  const select = new StringSelectMenuBuilder()
+    .setCustomId("bank_transfer_select_user")
+    .setPlaceholder("اختر المستفيد")
+    .addOptions(options);
+
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("bank_transfer_key_1").setLabel("1").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("bank_transfer_key_2").setLabel("2").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("bank_transfer_key_3").setLabel("3").setStyle(ButtonStyle.Secondary)
+  );
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("bank_transfer_key_4").setLabel("4").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("bank_transfer_key_5").setLabel("5").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("bank_transfer_key_6").setLabel("6").setStyle(ButtonStyle.Secondary)
+  );
+  const row3 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("bank_transfer_key_7").setLabel("7").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("bank_transfer_key_8").setLabel("8").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("bank_transfer_key_9").setLabel("9").setStyle(ButtonStyle.Secondary)
+  );
+  const rowSelect = new ActionRowBuilder().addComponents(select);
+  const rowCtrl = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("bank_transfer_key_مسح").setEmoji("1419791356179644588").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId("bank_transfer_key_0").setLabel("0").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("bank_transfer_key_تأكيد").setEmoji("1419532910070857749").setStyle(ButtonStyle.Success)
+  );
+
+  return [rowSelect, row1, row2, row3, rowCtrl];
+}
+
+// امر "تحويل" يفتح الواجهة بدلاً من الأمر النصي القديم
 async function handleTransferMessage(msg) {
   const content = msg.content.trim();
-  // صيغة متسامحة: "تحويل" ثم منشن ثم رقم
-  if (!content.startsWith("تحويل")) return;
-  const mention = msg.mentions.users.first();
-  const parts = content.split(/\s+/);
-  const amount = parseInt(parts[2], 10);
+  if (content !== "تحويل") return; // تجاهل أي شيء غير كلمة تحويل الصافية
 
-  if (!mention || isNaN(amount) || amount <= 0) {
-    return await msg.reply("<:icons8wrong1001:1415979909825695914> الاستخدام الصحيح: تحويل @شخص 1000");
+  const senderId = msg.author.id;
+  const walletBalance = await getBalance(senderId);
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🏦 بنك ${msg.author.username}`)
+    .setColor("Gold")
+    .setDescription(`**الرصيد الحالي:** ${walletBalance.toLocaleString("en-US")} ريال\n`)
+    .addFields(
+      { name: "المبلغ الحالي", value: "—", inline: true },
+      { name: "المستفيد", value: "لم يتم الاختيار", inline: true }
+    );
+
+  let options = [];
+  if (msg.guild) {
+    try {
+      // جلب الأعضاء وتحويلهم لمصفوفة عادية لتفادي أخطاء الدوال
+      const fetchedMembers = await msg.guild.members.fetch({ limit: 30 });
+      const membersArray = Array.from(fetchedMembers.values());
+      
+      options = membersArray
+        .filter(m => !m.user?.bot && m.id !== senderId)
+        .map(m => ({ 
+          label: String(m.displayName || m.user?.username || "مستخدم").slice(0, 50), 
+          description: `ID: ${m.id}`, 
+          value: m.id 
+        }))
+        .slice(0, 25);
+    } catch (err) {
+      console.error("فشل جلب الأعضاء:", err);
+    }
   }
-  if (mention.id === msg.author.id) {
-    return await msg.reply("<:icons8wrong1001:1415979909825695914> لا يمكنك تحويل رصيد لنفسك.");
+
+  if (options.length === 0) {
+    options.push({ label: "لا يوجد أعضاء (أو فشل الجلب)", value: "none" });
   }
 
-  const senderBalance = await getBalance(msg.author.id);
-  if (senderBalance < amount) {
-    return await msg.reply("<:icons8wrong1001:1415979909825695914> لا تملك رصيد كافي لاتمام التحويل.");
+  const controls = buildTransferControls(options);
+  transferState.set(senderId, { targetId: null, amount: "" });
+
+  return await msg.reply({ embeds: [embed], components: controls });
+}
+
+// معالج اختيار المستفيد (القائمة المنسدلة)
+async function handleTransferSelectUser(i) {
+  const userId = i.user.id;
+  const st = transferState.get(userId) || { targetId: null, amount: "" };
+  
+  st.targetId = i.values[0];
+  transferState.set(userId, st);
+  
+  const member = i.guild.members.cache.get(st.targetId);
+  const name = member ? member.displayName : "مستخدم غير معروف";
+
+  const embed = EmbedBuilder.from(i.message.embeds[0]);
+  const fields = embed.data.fields;
+  const idx = fields.findIndex(f => f.name === "المستفيد");
+  if (idx >= 0) fields[idx].value = `<@${st.targetId}> — **${name}**`;
+
+  return await i.update({ embeds: [embed] }).catch(() => {});
+}
+
+// ==========================================
+// قائمة الأعضاء الثابتة (لتفادي أخطاء جلب الأعضاء)
+// ==========================================
+const STATIC_USERS = [
+  { name: "نايل", id: "532264405476573224" },
+  { name: "لافندر", id: "545613574874071063" },
+  { name: "شكشوكة", id: "1106288355228004372" },
+  { name: "وحيدا", id: "696302530937880666" },
+  { name: "سويدة", id: "1270057947334185053" },
+  { name: "فيصل", id: "955228953113681970" },
+  { name: "كركم", id: "1097381729007849554" },
+  { name: "جبنة", id: "359427305979772938" },
+  { name: "ريان", id: "1374244101205131274" },
+  { name: "بريسلا", id: "830599978756997130" },
+  { name: "خالد", id: "734187812236034108" }
+];
+
+// امر "تحويل" يفتح الواجهة بدلاً من الأمر النصي القديم
+async function handleTransferMessage(msg) {
+  const content = msg.content.trim();
+  if (content !== "تحويل") return; // تجاهل أي شيء غير كلمة تحويل الصافية
+
+  const senderId = msg.author.id;
+  const walletBalance = await getBalance(senderId);
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🏦 بنك ${msg.author.username}`)
+    .setColor("Gold")
+    .setDescription(`**الرصيد الحالي:** ${walletBalance.toLocaleString("en-US")} ريال\n`)
+    .addFields(
+      { name: "المبلغ الحالي", value: "—", inline: true },
+      { name: "المستفيد", value: "لم يتم الاختيار", inline: true }
+    );
+
+  // استخدام القائمة الثابتة واستبعاد المرسل نفسه
+  const options = STATIC_USERS
+    .filter(m => m.id !== senderId)
+    .map(m => ({ 
+      label: m.name, 
+      description: `ID: ${m.id}`, 
+      value: m.id 
+    }));
+
+  if (options.length === 0) {
+    options.push({ label: "لا يوجد أعضاء", value: "none" });
   }
 
-  await addBalance(msg.author.id, -amount);
-  await addBalance(mention.id, amount);
+  const controls = buildTransferControls(options);
+  transferState.set(senderId, { targetId: null, amount: "" });
 
-  const background = await loadImage(path.join(__dirname, "صوره التحويل.png"));
-  const senderAvatar = await loadUserAvatar(msg.author);
-  const receiverAvatar = await loadUserAvatar(mention);
+  return await msg.reply({ embeds: [embed], components: controls });
+}
 
-  const canvas = createCanvas(background.width, background.height);
-  const ctx = canvas.getContext("2d");
+// معالج اختيار المستفيد (القائمة المنسدلة)
+async function handleTransferSelectUser(i) {
+  const userId = i.user.id;
+  const st = transferState.get(userId) || { targetId: null, amount: "" };
+  
+  st.targetId = i.values[0];
+  transferState.set(userId, st);
+  
+  // قراءة الاسم من القائمة الثابتة مباشرة
+  const staticUser = STATIC_USERS.find(u => u.id === st.targetId);
+  const name = staticUser ? staticUser.name : "مستخدم غير معروف";
 
-  ctx.drawImage(background, 0, 0);
+  const embed = EmbedBuilder.from(i.message.embeds[0]);
+  const fields = embed.data.fields;
+  const idx = fields.findIndex(f => f.name === "المستفيد");
+  if (idx >= 0) fields[idx].value = `<@${st.targetId}> — **${name}**`;
 
-  const member = msg.guild ? await msg.guild.members.fetch(mention.id).catch(() => null) : null;
-  const nickname = member?.nickname || mention.username || mention.tag;
+  return await i.update({ embeds: [embed] }).catch(() => {});
+}
 
-  drawCircularImage(ctx, senderAvatar, 330, 237, 160);
-  drawCircularImage(ctx, receiverAvatar, 1320, 237, 160);
-  drawText(ctx, `${amount.toLocaleString("en-US")}`, 850, 430, "115px");
-  drawText(ctx, `${nickname}`, 850, 530, "75px Cairo", "#b0d4eb", "center");
-  drawText(ctx, `${mention.id}`, 850, 600, "25px Cairo", "#b0d4eb", "center");
-  drawText(ctx, `${msg.author.id}`, 140, 1050, "35px c", "#b0d4eb", "left");
+// معالج أزرار الأرقام وإصدار إيصال الصورة
+async function handleTransferKeys(i) {
+  const userId = i.user.id;
+  const key = i.customId.replace("bank_transfer_key_", "");
+  const st = transferState.get(userId) || { targetId: null, amount: "" };
 
-  const buffer = await canvas.encode("png");
-  return await msg.reply({ files: [{ attachment: buffer, name: "transfer.png" }] });
+  if (key === "مسح") {
+    st.amount = st.amount.slice(0, -1);
+  } else if (/^\d$/.test(key)) {
+    if (st.amount.length < 10) st.amount += key;
+  } 
+  else if (key === "تأكيد") {
+    const amount = parseInt(st.amount || "0");
+    if (!st.targetId || st.targetId === "none") return i.reply({ content: "❌ اختر مستفيداً أولاً من القائمة.", ephemeral: true });
+    if (!amount || amount <= 0) return i.reply({ content: "❌ أدخل مبلغاً صحيحاً.", ephemeral: true });
+
+    const senderBalance = await getBalance(userId);
+    if (senderBalance < amount) return i.reply({ content: "❌ رصيدك غير كافٍ.", ephemeral: true });
+
+    // خصم وإضافة باستخدام دوالك الأساسية
+    await subtractBalance(userId, amount);
+    await addBalance(st.targetId, amount);
+
+    // تسجيل العملية في الداتابيس لكشف الحساب
+    try {
+      await db.collection("transactions").insertMany([
+        { userId: String(userId), amount: -amount, reason: `تحويل إلى <@${st.targetId}>`, timestamp: new Date() },
+        { userId: String(st.targetId), amount: amount, reason: `تحويل من <@${userId}>`, timestamp: new Date() }
+      ]);
+    } catch(e) { console.error("Database log error:", e); }
+
+    transferState.delete(userId); 
+    await i.update({ content: "⏳ جاري إصدار الإيصال...", embeds: [], components: [] }).catch(() => {});
+
+    // إنشاء صورة الإيصال وإرسالها
+    try {
+      const background = await loadImage(path.join(__dirname, "صوره التحويل.png"));
+      const senderAvatar = await loadUserAvatar(i.user);
+      
+      let receiverAvatar;
+      try {
+        const receiverUser = await i.client.users.fetch(st.targetId);
+        receiverAvatar = await loadUserAvatar(receiverUser);
+      } catch {
+        receiverAvatar = senderAvatar; // احتياطي في حال فشل جلب صورة المستفيد
+      }
+
+      const canvas = createCanvas(background.width, background.height);
+      const ctx = canvas.getContext("2d");
+
+      ctx.drawImage(background, 0, 0);
+
+      // جلب الاسم من القائمة الثابتة للصورة
+      const staticUser = STATIC_USERS.find(u => u.id === st.targetId);
+      const nickname = staticUser ? staticUser.name : "مستخدم";
+
+      drawCircularImage(ctx, senderAvatar, 330, 237, 160);
+      drawCircularImage(ctx, receiverAvatar, 1320, 237, 160);
+      drawText(ctx, `${amount.toLocaleString("en-US")}`, 850, 430, "115px");
+      drawText(ctx, `${nickname}`, 850, 530, "75px Cairo", "#b0d4eb", "center");
+      drawText(ctx, `${st.targetId}`, 850, 600, "25px Cairo", "#b0d4eb", "center");
+      drawText(ctx, `${userId}`, 140, 1050, "35px c", "#b0d4eb", "left");
+
+      const buffer = await canvas.encode("png");
+      const attachment = new AttachmentBuilder(buffer, { name: "transfer.png" });
+      
+      return await i.editReply({ content: "✅ **تم التحويل بنجاح!**", files: [attachment] }).catch(() => {});
+    } catch (err) {
+      console.error(err);
+      return await i.editReply({ content: `✅ **تم التحويل بنجاح!**\nمبلغ: ${amount.toLocaleString("en-US")} ريال إلى <@${st.targetId}>` }).catch(() => {});
+    }
+  }
+
+  transferState.set(userId, st);
+
+  // تحديث خانة المبلغ في الرسالة التفاعلية
+  const embed = EmbedBuilder.from(i.message.embeds[0]);
+  const fields = embed.data.fields;
+  const idx = fields.findIndex(f => f.name === "المبلغ الحالي");
+  if (idx >= 0) fields[idx].value = st.amount.length ? parseInt(st.amount).toLocaleString("en-US") + " ريال" : "—";
+  
+  return await i.update({ embeds: [embed] }).catch(() => {});
 }
