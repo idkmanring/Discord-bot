@@ -289,7 +289,6 @@ function createUIRouter(client) {
       try {
         if (msg.author?.bot) return;
         const text = msg.content?.trim() || '';
-
         // (1) مطابقة تامة — يسمح بتعدد المعالجات لنفس النص
         const exactList = routes.messages.exact.get(text);
         if (exactList && exactList.length) {
@@ -348,11 +347,10 @@ function createUIRouter(client) {
 }
 // انشئ الراوتر مرّة واحدة اعلى الملف
 const ui = createUIRouter(client);
-
+// ربط دوال التحويل بالراوتر عشان تشتغل الأزرار والقائمة
 ui.messageExact("تحويل", handleTransferMessage);
 ui.selectExact("bank_transfer_select_user", handleTransferSelectUser);
 ui.buttonPrefix("bank_transfer_key_", handleTransferKeys);
-
 // ===== Solo Bet Flow =====
 ui.buttonExact("hit", handleMultiplayerBlackjackInteraction);
 ui.buttonExact("stand", handleMultiplayerBlackjackInteraction);
@@ -366,6 +364,11 @@ ui.buttonPrefix("passbomb_", handleBombPass);
 
 // اختيار لعبة متعددة اللاعبين
 ui.selectExact("select_multi_game", handleSelectMultiGame);
+
+ui.buttonPrefix("soloxo_", handleSoloXOButtons);
+ui.buttonPrefix("multixo_", handleMultiXOButtons);
+ui.messageExact("اكس او", (msg) => handleTextGameShortcut(msg, "soloxo"));
+ui.buttonPrefix("hide_", handleHideButtons);
 
 // ازرار اللوبي
 ui.buttonExact("lobby_join", handleLobbyJoin);
@@ -495,7 +498,6 @@ const handleMinigameInteraction = require("./events/interactionHandler");  // م
 
 const handleShopCommand = require("./commands/shop");  // امر "المتجر"
 const handleShopInteraction = require("./shop");       // تفاعلات المتجر
-
 // لعبة حرف (داخل مجلد games)
 const harfModule = require("./games/harf");
 const startHarfGame = harfModule.startHarfGame || harfModule;                  // يدعم حالتي التصدير
@@ -1466,6 +1468,7 @@ ui.messageFilter(
  *   [مسح][0][تأكيد][إلغاء]
  ******************************************/
 
+// أضف هذه ضمن soloGamesMap
 const soloGamesMap = {
   soloroulette: "startSoloRoulette",
   soloslot: "startSlotMachine",
@@ -1473,8 +1476,10 @@ const soloGamesMap = {
   solobus: "startSoloBus",
   blackjack: "startBlackjackSolo",
   buckshot: "startBuckshotSolo",
+  soloxo: "startSoloXO", // <== أضف هذا السطر
 };
 
+// أضف الدالة للقائمة
 const soloGameFunctions = {
   startSoloRoulette,
   startSlotMachine,
@@ -1482,15 +1487,18 @@ const soloGameFunctions = {
   startSoloBus,
   startBlackjackSolo,
   startBuckshotSolo,
+  startSoloXO, // <== أضف هذا السطر
 };
 
+// تحديث أسماء الألعاب
 const gameNames = {
   soloroulette: " روليت",
   soloslot: " ماكينة السلوت",
   solomystery: " صندوق الحظ",
   solobus: " تحدي الاوراق ",
   blackjack: " بلاك جاك",
-  buckshot: " باكشوت"
+  buckshot: " باكشوت",
+  soloxo: " اكس او", // <== أضف هذا السطر
 };
 const getArabicGameName = (id) => gameNames[id] || id;
 
@@ -3182,7 +3190,7 @@ function startBuckshotSolo(interaction, bet) {
 
   const game = {
     userId,
-    username: interaction.user.username,
+    username: interaction.member.displayName,
     playerHearts: 6,
     botHearts: 6,
     turn: "player",
@@ -3627,6 +3635,131 @@ function botPlay(userId) {
   sendBuckshotGameUI(game.msg, userId, log);
 }
 
+/******************************************
+ * ❌⭕ لعبة إكس أو (مساعدات عامة)
+ ******************************************/
+
+function checkXOWin(board) {
+  const winLines = [
+    [0, 1, 2], [3, 4, 5], [6, 7, 8], // أفقي
+    [0, 3, 6], [1, 4, 7], [2, 5, 8], // عمودي
+    [0, 4, 8], [2, 4, 6]             // قطري
+  ];
+  for (const [a, b, c] of winLines) {
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+      return board[a]; // 'X' أو 'O'
+    }
+  }
+  if (!board.includes(null)) return 'Draw';
+  return null;
+}
+function buildXOGrid(board, prefix, disabled = false) {
+  const rows = [];
+  for (let i = 0; i < 3; i++) {
+    const row = new ActionRowBuilder();
+    for (let j = 0; j < 3; j++) {
+      const idx = i * 3 + j;
+      const val = board[idx];
+      const btn = new ButtonBuilder()
+        .setCustomId(`${prefix}_${idx}`)
+        .setStyle(val === 'X' ? ButtonStyle.Secondary : val === 'O' ? ButtonStyle.Secondary : ButtonStyle.Secondary)
+        .setDisabled(disabled || val !== null);
+
+      // تم الإصلاح هنا: تمرير الإيموجي كـ Object
+      if (val === 'X') btn.setEmoji({ id: "1407439999611310130" });
+      else if (val === 'O') btn.setEmoji({ id: "1481411513632686181" });
+      else btn.setLabel("\u200B"); // مسافة مخفية مقبولة في ديسكورد
+      
+      row.addComponents(btn);
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+/******************************************
+ * 🤖 X-O Solo (ضد البوت)
+ ******************************************/
+const activeSoloXO = new Map(); // userId -> game
+
+async function startSoloXO(interaction, bet) {
+  const userId = interaction.user.id;
+  const game = {
+    userId,
+    bet,
+    board: Array(9).fill(null),
+    msgId: null
+  };
+  activeSoloXO.set(userId, game);
+
+  const embed = new EmbedBuilder()
+    .setTitle(" إكس أو (ضد البوت)")
+    .setColor("#8527ff")
+    .setDescription(`**رهانك:** ${bet.toLocaleString("en-US")} ريال`);
+
+  const components = buildXOGrid(game.board, `soloxo_${userId}`);
+  
+  if (!interaction.replied && !interaction.deferred) await interaction.deferUpdate().catch(() => {});
+  const msg = await interaction.channel.send({ embeds: [embed], components });
+  game.msgId = msg.id;
+}
+
+async function handleSoloXOButtons(i) {
+  if (!i.isButton()) return;
+  const parts = i.customId.split("_");
+  const userId = parts[1];
+  const idx = parseInt(parts[2]);
+
+  if (i.user.id !== userId) return i.reply({ content: "<:icons8wrong1001:1415979909825695914> هذي الجيم مو لك!", ephemeral: true });
+  
+  const game = activeSoloXO.get(userId);
+  if (!game) return i.reply({ content: "<:icons8wrong1001:1415979909825695914> اللعبة انتهت أو غير موجودة.", ephemeral: true });
+
+  await i.deferUpdate().catch(() => {});
+  
+  // حركة اللاعب
+  game.board[idx] = 'X';
+  let result = checkXOWin(game.board);
+
+  // حركة البوت لو ما خلصت اللعبة
+  if (!result) {
+    const empty = game.board.map((v, i) => v === null ? i : null).filter(v => v !== null);
+    if (empty.length > 0) {
+      const botMove = empty[Math.floor(Math.random() * empty.length)];
+      game.board[botMove] = 'O';
+      result = checkXOWin(game.board);
+    }
+  }
+
+  const embed = new EmbedBuilder().setTitle(" إكس أو (ضد البوت)");
+  let components = buildXOGrid(game.board, `soloxo_${userId}`, !!result);
+
+  if (result) {
+    activeSoloXO.delete(userId);
+    const retryRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("solo_retry_soloxo").setLabel("إعادة المحاولة").setEmoji("1407461810566860941").setStyle(ButtonStyle.Secondary)
+    );
+    components.push(retryRow);
+
+    if (result === 'X') {
+      const payout = game.bet * 2;
+      await updateBalanceWithLog(db, userId, payout, " اكس او - فوز");
+      await addBalance(userId, game.bet);
+      await updateSoloStats(userId, "soloxo", game.bet, true, payout);
+      embed.setColor("Green").setDescription(`<:icons8trophy100:1416394314904244234> **فزت على البوت!**\nربحت ${payout.toLocaleString("en-US")} ريال!`);
+    } else if (result === 'O') {
+      await db.collection("transactions").insertOne({ userId, amount: -game.bet, reason: " اكس او - خسارة", timestamp: new Date() });
+      await updateSoloStats(userId, "soloxo", game.bet, false, 0);
+      embed.setColor("Red").setDescription(`<:icons8wrong1001:1415979909825695914> **خسرت!** البوت فاز عليك.`);
+    } else {
+      await updateBalanceWithLog(db, userId, game.bet, " اكس او - تعادل");
+      await updateSoloStats(userId, "soloxo", game.bet, false, game.bet);
+      embed.setColor("Grey").setDescription(` **تعادل!** تم استرجاع رهانك.`);
+    }
+  } else {
+  }
+
+  await i.message.edit({ embeds: [embed], components }).catch(() => {});
+}
 
 /******************************************
 اللوبي الجماعي - منطق كامل + صور (تقليم الزائدين عند البدء)
@@ -3664,13 +3797,17 @@ async function updateLobbyMessage(i, lobby, gameInfo) {
   const lobbyMessage = await i.channel.messages.fetch(lobby.messageId).catch(() => null);
   if (!lobbyMessage) return;
 
+  const fs = require('fs');
+  const imgPath = `./assets/lobbies/${lobby.gameId}.png`;
+  const filesToAttach = fs.existsSync(imgPath) ? [imgPath] : []; // التأكد من وجود الصورة
+
   await lobbyMessage.edit({
     content: `<:icons8addusermale100:1408217026350153750> انضم (${playerCount}/${maxPlayers}) \n <:userssolidfull:1407423118993002668>  اللاعبين: ${allPlayers}`,
-    files: [`./assets/lobbies/${lobby.gameId}.png`],
+    files: filesToAttach,
     components: [row]
   }).catch(() => {});
 }
-
+/* اختيار لعبة متعددة اللاعبين (Select Menu) */
 /* اختيار لعبة متعددة اللاعبين (Select Menu) */
 async function handleSelectMultiGame(i) {
   if (!i.isStringSelectMenu()) return;
@@ -3699,9 +3836,13 @@ async function handleSelectMultiGame(i) {
   const isFull = playerCount >= maxPlayers;
   const row = buildLobbyRow(isFull);
 
+  const fs = require('fs');
+  const imgPath = `./assets/lobbies/${gameId}.png`;
+  const filesToAttach = fs.existsSync(imgPath) ? [imgPath] : []; // تفادي كراش الصورة
+
   const sent = await i.update({
     content: `<:icons8addusermale100:1408217026350153750> انضم  (${playerCount}/${maxPlayers} )`,
-    files: [`./assets/lobbies/${gameId}.png`],
+    files: filesToAttach,
     components: [row],
     fetchReply: true
   }).catch(() => null);
@@ -3723,7 +3864,6 @@ async function handleSelectMultiGame(i) {
     delete activeLobbies[i.channel.id];
   }, 90000);
 }
-
 /* زر الانضمام */
 async function handleLobbyJoin(i) {
   if (i.customId !== "lobby_join") return;
@@ -3765,7 +3905,7 @@ async function handleLobbyJoin(i) {
   // خصم 1000 والانضمام مباشرة
   await subtractBalance(userId, 1000).catch(() => {});
   lobby.players[userId] = {
-    username: i.user.username,
+    username: i.member.displayName,
     bet: 1000,
     joinedAt: Date.now(),
     ready: true
@@ -3810,6 +3950,7 @@ async function handleLobbyBet(i) {
 }
 
 /* زر الانسحاب */
+/* زر الانسحاب */
 async function handleLobbyLeave(i) {
   if (i.customId !== "lobby_leave") return;
   const lobby = activeLobbies[i.channel.id];
@@ -3836,17 +3977,19 @@ async function handleLobbyLeave(i) {
     const maxPlayers = gameInfo.maxPlayers;
     const allPlayers = buildPlayersLine(lobby.players);
 
+    const fs = require('fs');
+    const imgPath = `./assets/lobbies/${lobby.gameId}.png`;
+    const filesToAttach = fs.existsSync(imgPath) ? [imgPath] : []; // التأكد من وجود الصورة
+
     await lobbyMessage.edit({
       content: `<:icons8addusermale100:1408217026350153750> انضم (${playerCount}/${maxPlayers}) \n <:userssolidfull:1407423118993002668> اللاعبين: ${allPlayers} `,
-      files: [`./assets/lobbies/${lobby.gameId}.png`],
+      files: filesToAttach,
       components: [row]
     }).catch(() => {});
   }
 
   return i.reply({ content: "🚪 تم انسحابك من اللوبي وتم استرجاع المبلغ.", ephemeral: true });
-}
-
-/* زر بدء اللعبة — تقليم الزائدين ثم البدء */
+}/* زر بدء اللعبة — تقليم الزائدين ثم البدء */
 async function handleLobbyStart(i) {
   if (i.customId !== "lobby_start") return;
 
@@ -3943,7 +4086,7 @@ async function handleForceBetModal(i, params) {
   if (!lobby.players[i.user.id]) {
     await subtractBalance(i.user.id, betAmount).catch(() => {});
     lobby.players[i.user.id] = {
-      username: i.user.username,
+      username: i.member.displayName,
       bet: betAmount,
       joinedAt: Date.now(),
       ready: true
@@ -3994,7 +4137,7 @@ async function handleBetModal(i, params) {
   if (!lobby.players[i.user.id]) {
     await subtractBalance(i.user.id, betAmount).catch(() => {});
     lobby.players[i.user.id] = {
-      username: i.user.username,
+      username: i.member.displayName,
       bet: betAmount,
       joinedAt: Date.now(),
       ready: true
@@ -4054,6 +4197,18 @@ const multiGamesMap = {
     name: "عداد الانفجار",
     minPlayers: 2,
     maxPlayers: 99
+  },
+  multi_xo: { // <== أضف هذا البلوك
+    start: startMultiplayerXO,
+    name: "اكس او",
+    minPlayers: 2,
+    maxPlayers: 2
+  },
+  multi_hide: {
+    start: startHideGame,
+    name: "لعبة هايد (غميمة)",
+    minPlayers: 2,
+    maxPlayers: 10
   }
 };
 
@@ -4104,7 +4259,7 @@ async function showMultiplayerStats(user, interaction) {
   const winRate = totalGames > 0 ? ((totalWins / totalGames) * 100).toFixed(1) : "0";
 
   const embed = new EmbedBuilder()
-    .setTitle(` احصائيات الالعاب الجماعية لـ ${user.username}`)
+    .setTitle(` احصائيات الالعاب الجماعية لـ ${member.displayName}`)
     .addFields(
       { name: " مرات الفوز", value: `${totalWins} <:icons8trophy100:1416394314904244234> `, inline: true },
       { name: " مرات الخسارة", value: `${totalLosses} <:icons8loss100:1416394312056442980> `, inline: true },
@@ -4218,7 +4373,7 @@ async function renderBlackjackMulti(game) {
     const total = calcHandMulti(player.hand);
     ctx.fillStyle = "white";
     ctx.font = "bold 45px PressStart2P";
-    ctx.fillText(`${user.username}: ${total}`, pos.x, pos.y - 40);
+    ctx.fillText(`${member.displayName}: ${total}`, pos.x, pos.y - 40);
 
     idx++;
   }
@@ -4459,7 +4614,7 @@ async function finishGameMulti(channelId) {
     ctx.fillStyle = "#8FD6FF";
     ctx.font = "bold 64px PressStart2P";
     ctx.textAlign = "center";
-    ctx.fillText(winnerUser.username, centerX, centerY + 325);
+    ctx.fillText(winnermember.displayName, centerX, centerY + 325);
 
     const buffer = canvas.toBuffer("image/png");
     const attachment = new AttachmentBuilder(buffer, { name: "winner.png" });
@@ -5549,19 +5704,37 @@ async function startExplosionRound(channelId) {
 async function passBomb(i, targetId) {
   const game = explosionGames[i.channel.id];
   if (!game) {
-    return i.reply({ content: "<:icons8wrong1001:1415979909825695914> لا توجد لعبة نشطة هنا.", ephemeral: true }).catch(() => {});
+    return i.reply({ content: "❌ لا توجد لعبة نشطة هنا.", ephemeral: true }).catch(() => {});
   }
 
+  // 1. فحص إذا القنبلة مو بيده أساساً
+  if (game.currentHolder !== i.user.id) {
+    return i.reply({ content: "💣 القنبلة مو بيدك! فقط الشخص اللي طالعة صورته (ماسك القنبلة) يقدر يضغط الزر ويمررها.", ephemeral: true }).catch(() => {});
+  }
+
+  // دالة فحص الحياة
   const alive = id => !game.eliminated.includes(id);
-  if (game.currentHolder !== i.user.id || targetId === i.user.id || !alive(targetId) || !alive(i.user.id)) {
-    return i.reply({ content: "<:icons8wrong1001:1415979909825695914> لا يمكنك تمرير القنبلة بهذا الشكل.", ephemeral: true }).catch(() => {});
+
+  // 2. فحص إذا اللاعب انفجر وطلع من اللعبة وضغط متأخر
+  if (!alive(i.user.id)) {
+    return i.reply({ content: "💀 القنبلة انفجرت فيك وطلعت من اللعبة خلاص!", ephemeral: true }).catch(() => {});
   }
 
-  // تمرير القنبلة
+  // 3. فحص إذا يحاول يمررها لنفسه (حماية إضافية)
+  if (targetId === i.user.id) {
+    return i.reply({ content: "❌ ما تقدر تمرر القنبلة لنفسك يا ذكي!", ephemeral: true }).catch(() => {});
+  }
+
+  // 4. فحص إذا الضحية ميت أصلاً
+  if (!alive(targetId)) {
+    return i.reply({ content: "💀 هذا اللاعب منفجر وطالع من اللعبة، اختار شخص حي!", ephemeral: true }).catch(() => {});
+  }
+
+  // --- إذا كل الشروط سليمة، يتم التمرير بنجاح ---
   game.currentHolder = targetId;
   game.holdStartTime = Date.now();
 
-  // اعد ضبط مؤقت الامساك فقط
+  // إعادة ضبط مؤقت الإمساك فقط
   const { explodeAfter } = getRoundSettings(game.round);
   if (game.holdTimeout) clearTimeout(game.holdTimeout);
   game.holdTimeout = setTimeout(() => bombExplodes(i.channel.id, true), explodeAfter);
@@ -5569,7 +5742,6 @@ async function passBomb(i, targetId) {
   await i.deferUpdate().catch(() => {});
   await renderExplosionGame(i.channel.id);
 }
-
 // انفجار القنبلة (انتهاء الامساك او نهاية مدّة الجولة)
 async function bombExplodes(channelId, byHold = false) {
   const game = explosionGames[channelId];
@@ -5820,7 +5992,7 @@ async function eliminateInactive(channelId) {
 
   game.eliminated.push(game.currentPlayer);
   const user = game.players.find(p => p.id === game.currentPlayer);
-  game.log.push(`⏰ لم يتخذ ${user.username} قرارًا وتم اقصاؤه تلقائيًا.`);
+  game.log.push(`⏰ لم يتخذ ${member.displayName} قرارًا وتم اقصاؤه تلقائيًا.`);
   await renderRouletteGame(channelId);
 
   const remaining = game.players.filter(p => !game.eliminated.includes(p.id));
@@ -5839,20 +6011,20 @@ async function handleRouletteAction(i, targetId) {
   const alive = game.players.filter(p => !game.eliminated.includes(p.id));
 
   if (targetId === "skip") {
-    game.log.push(`🔄 ${i.user.username} قرر تجاوز الجولة دون اقصاء احد.`);
+    game.log.push(`🔄 ${i.member.displayName} قرر تجاوز الجولة دون اقصاء احد.`);
   } else if (targetId === "random") {
     const choices = alive.filter(p => p.id !== i.user.id);
     const chosen = choices[Math.floor(Math.random() * choices.length)];
     if (chosen) {
       game.eliminated.push(chosen.id);
-      game.log.push(`🎲 ${i.user.username} ضغط عشوائي، وتم طرد ${chosen.username}`);
+      game.log.push(`🎲 ${i.member.displayName} ضغط عشوائي، وتم طرد ${chosen.username}`);
     }
   } else {
     if (targetId === i.user.id) return; // لا يجوز طرد نفسك
     if (!alive.some(p => p.id === targetId)) return; // الهدف يجب ان يكون حياً
     game.eliminated.push(targetId);
     const target = game.players.find(p => p.id === targetId);
-    game.log.push(`☠️ ${i.user.username} طرد ${target.username}`);
+    game.log.push(`☠️ ${i.member.displayName} طرد ${target.username}`);
   }
 
   clearTimeoutSafe(game);
@@ -5868,64 +6040,78 @@ async function handleRouletteAction(i, targetId) {
 }
 
 /* توليد GIF للعجلة */
+/* توليد GIF للعجلة (مُحسّن وسريع جدًا) */
 async function renderRouletteGif(game, duration = 3000) {
-  const width = 1152, height = 768;
+  // 1. تقليل الدقة للنصف لتسريع عملية الـ Encoding جداً
+  const width = 576, height = 384; 
   const encoder = new GIFEncoder(width, height);
   const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { alpha: false }); // إلغاء الشفافية يسرع الأداء
 
-  const frames = [];
-  const steps = Math.max(1, Math.floor(duration / 100));
   const alivePlayers = game.players.filter(p => !game.eliminated.includes(p.id));
   const angleStep = (2 * Math.PI) / alivePlayers.length;
 
-  for (let i = 0; i < steps; i++) {
-    ctx.clearRect(0, 0, width, height);
+  // 2. [السر] رسم العجلة مرة واحدة فقط على لوحة جانبية (Cache Canvas)
+  const wheelCanvas = createCanvas(width, height);
+  const wheelCtx = wheelCanvas.getContext("2d");
+  
+  wheelCtx.translate(width / 2, height / 2);
+  alivePlayers.forEach((p, idx) => {
+    const startAngle = idx * angleStep;
+    const endAngle = startAngle + angleStep;
 
-    const angleOffset = (i / steps) * Math.PI * 12;
+    wheelCtx.beginPath();
+    wheelCtx.moveTo(0, 0);
+    // تصغير القطر ليتناسب مع الدقة الجديدة
+    wheelCtx.arc(0, 0, 150, startAngle, endAngle); 
+    wheelCtx.closePath();
+    wheelCtx.fillStyle = wheelColors[idx % wheelColors.length];
+    wheelCtx.fill();
+
+    // الأسماء
+    const angle = startAngle + angleStep / 2;
+    const x = Math.cos(angle) * 100;
+    const y = Math.sin(angle) * 100;
+    wheelCtx.save();
+    wheelCtx.translate(x, y);
+    wheelCtx.rotate(angle + Math.PI / 2);
+    wheelCtx.font = "14px PressStart2P"; // تصغير الخط ليتناسب مع الدقة
+    wheelCtx.fillStyle = "black";
+    wheelCtx.textAlign = "center";
+    wheelCtx.fillText(p.username, 0, 0);
+    wheelCtx.restore();
+  });
+
+  // 3. إنشاء الإطارات عن طريق تدوير الصورة الجاهزة فقط (سريع جداً)
+  const frames = [];
+  // تقليل عدد الفريمات (15 فريم في 3 ثواني كافية جداً للخداع البصري)
+  const steps = 30; 
+
+  // رسم خلفية ديسكورد الرمادية الموحدة
+  ctx.fillStyle = "#313338"; 
+
+  for (let i = 0; i < steps; i++) {
+    ctx.fillRect(0, 0, width, height); // تعبئة الخلفية
+
+    const angleOffset = (i / steps) * Math.PI * 30; // سرعة الدوران
 
     ctx.save();
     ctx.translate(width / 2, height / 2);
-
-    // الاقسام الملونة
-    alivePlayers.forEach((p, idx) => {
-      const startAngle = idx * angleStep + angleOffset;
-      const endAngle = startAngle + angleStep;
-
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.arc(0, 0, 300, startAngle, endAngle);
-      ctx.closePath();
-      ctx.fillStyle = wheelColors[idx % wheelColors.length];
-      ctx.fill();
-    });
-
-    // الاسماء
     ctx.rotate(angleOffset);
-    ctx.font = "28px PressStart2P";
-    ctx.fillStyle = "black";
-    ctx.textAlign = "center";
-    alivePlayers.forEach((p, idx) => {
-      const angle = idx * angleStep + angleStep / 2;
-      const x = Math.cos(angle) * 200;
-      const y = Math.sin(angle) * 200;
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.rotate(angle + Math.PI / 2);
-      ctx.fillText(p.username, 0, 0);
-      ctx.restore();
-    });
-
+    ctx.translate(-width / 2, -height / 2);
+    
+    // رسم العجلة المخبأة مسبقاً
+    ctx.drawImage(wheelCanvas, 0, 0);
     ctx.restore();
 
-    // السهم الثابت على يمين العجلة
+    // السهم الثابت (تم تعديل مكانه للدقة الجديدة)
     ctx.save();
-    ctx.translate(width / 2 + 310, height / 2);
+    ctx.translate(width / 2 + 160, height / 2);
     ctx.fillStyle = "white";
     ctx.beginPath();
-    ctx.moveTo(0, -20);
-    ctx.lineTo(-20, 0);
-    ctx.lineTo(0, 20);
+    ctx.moveTo(0, -10);
+    ctx.lineTo(-15, 0);
+    ctx.lineTo(0, 10);
     ctx.closePath();
     ctx.fill();
     ctx.restore();
@@ -5933,15 +6119,16 @@ async function renderRouletteGif(game, duration = 3000) {
     frames.push(ctx.getImageData(0, 0, width, height).data);
   }
 
+  // 4. بناء الـ GIF
   encoder.start();
-  encoder.setDelay(100);
+  encoder.setDelay(120); // 200ms لكل إطار لتتناسب مع الـ 15 خطوة
   encoder.setRepeat(0);
-  encoder.setQuality(10);
+  encoder.setQuality(20); // جودة أقل = سرعة خيالية في الـ Encode
   for (const frame of frames) encoder.addFrame(frame, true);
   encoder.finish();
+  
   return encoder.out.getData();
 }
-
 /* صورة النتيجة بين الجيف والازرار */
 async function renderRouletteResult(game, winnerId) {
   const width = 1152, height = 768;
@@ -6014,9 +6201,14 @@ async function renderRouletteResult(game, winnerId) {
 }
 
 /* صورة الفوز بخلفية مخصصة */
+/* صورة الفوز بخلفية مخصصة */
 async function renderWinnerBackground(game, winnerId) {
   const winnerUser = await client.users.fetch(winnerId);
   const avatar = await loadUserAvatar(winnerUser);
+  
+  // ✅ جلب اسم اللاعب من بيانات اللعبة بدلاً من المتغير الوهمي
+  const winnerPlayer = game.players.find(p => p.id === winnerId);
+  const winnerName = winnerPlayer ? winnerPlayer.username : (winnerUser.globalName || winnerUser.username);
 
   const canvas = createCanvas(assets.winnerBackground.width, assets.winnerBackground.height);
   const ctx = canvas.getContext("2d");
@@ -6041,11 +6233,12 @@ async function renderWinnerBackground(game, winnerId) {
   ctx.fillStyle = "#8FD6FF";
   ctx.font = "bold 48px PressStart2P";
   ctx.textAlign = "center";
-  ctx.fillText(winnerUser.username, centerX, centerY + 325);
+  
+  // ✅ وضعنا اسم الفائز الصحيح هنا
+  ctx.fillText(winnerName, centerX, centerY + 325);
 
   return new AttachmentBuilder(await canvas.encode("png"), { name: "winner.png" });
 }
-
 /* عرض اللعبة (GIF -> نتيجة + ازرار) */
 async function renderRouletteGame(channelId) {
   const game = rouletteGames[channelId];
@@ -6133,11 +6326,435 @@ async function handleRouletteButtons(i) {
 }
 
 
+/******************************************
+ * ⚔️ X-O Multiplayer (ضد لاعب آخر)
+ ******************************************/
+const activeMultiXO = new Map(); // channelId -> game
+
+async function startMultiplayerXO(channelId) {
+  const lobby = activeLobbies[channelId];
+  if (!lobby || lobby.status !== "waiting") return;
+
+  const players = Object.entries(lobby.players)
+    .filter(([_, p]) => p.ready)
+    .map(([id, p]) => ({ id, username: p.username, bet: p.bet }));
+
+  if (players.length !== 2) return;
+  lobby.status = "playing";
+
+  const p1 = players[0];
+  const p2 = players[1];
+
+  const game = {
+    channelId,
+    players: {
+      [p1.id]: { symbol: 'X', ...p1 },
+      [p2.id]: { symbol: 'O', ...p2 }
+    },
+    turn: p1.id,
+    board: Array(9).fill(null),
+    msgId: null
+  };
+  activeMultiXO.set(channelId, game);
+
+  const embed = new EmbedBuilder()
+    .setTitle(" إكس أو الجماعية")
+    .setColor("#9340ff")
+    .setDescription(`**اللاعبين:**\n❌ <@${p1.id}>\n⭕ <@${p2.id}>\n\nالرهان: ${p1.bet} ريال.\n\n🎮 **الدور الآن على:** <@${game.turn}>`);
+
+  const components = buildXOGrid(game.board, `multixo_${channelId}`);
+  const channel = await client.channels.fetch(channelId);
+  const msg = await channel.send({ embeds: [embed], components });
+  game.msgId = msg.id;
+}
+
+async function handleMultiXOButtons(i) {
+  if (!i.isButton()) return;
+  const parts = i.customId.split("_");
+  const channelId = parts[1];
+  const idx = parseInt(parts[2]);
+
+  const game = activeMultiXO.get(channelId);
+  if (!game) return i.reply({ content: "<:icons8wrong1001:1415979909825695914> اللعبة انتهت.", ephemeral: true });
+
+  const userId = i.user.id;
+  if (!game.players[userId]) return i.reply({ content: "أنت لست من ضمن هذه اللعبة!", ephemeral: true });
+  if (game.turn !== userId) return i.reply({ content: "⏳ اصبر، ليس دورك!", ephemeral: true });
+
+  await i.deferUpdate().catch(() => {});
+
+  const player = game.players[userId];
+  game.board[idx] = player.symbol;
+
+  const result = checkXOWin(game.board);
+  let nextTurn = null;
+
+  if (!result) {
+    nextTurn = Object.keys(game.players).find(id => id !== userId);
+    game.turn = nextTurn;
+  }
+
+  const embed = new EmbedBuilder().setTitle(" إكس أو الجماعية");
+  const components = buildXOGrid(game.board, `multixo_${channelId}`, !!result);
+
+  if (result) {
+    activeMultiXO.delete(channelId);
+    const p1 = Object.values(game.players)[0];
+    const p2 = Object.values(game.players)[1];
+    const totalPot = p1.bet + p2.bet;
+
+    if (result === 'X' || result === 'O') {
+      const winnerId = result === 'X' ? Object.keys(game.players).find(id => game.players[id].symbol === 'X') : Object.keys(game.players).find(id => game.players[id].symbol === 'O');
+      const loserId = winnerId === p1.id ? p2.id : p1.id;
+      const winner = game.players[winnerId];
+      const loser = game.players[loserId];
+
+      const payout = Math.max(winner.bet * 2, totalPot);
+
+      await updateBalanceWithLog(db, winner.id, payout, " اكس او جماعي - فوز");
+      await addBalance(winner.id, winner.bet);
+      await updateMultiplayerStats(winner.id, "multi_xo", true, payout, 0);
+
+      await db.collection("transactions").insertOne({ userId: loser.id, amount: -loser.bet, reason: " اكس او جماعي - خسارة", timestamp: new Date() });
+      await updateMultiplayerStats(loser.id, "multi_xo", false, 0, loser.bet);
+
+      embed.setColor("Green").setDescription(`<:icons8trophy100:1416394314904244234> **انتهت اللعبة!**\nالفائز هو <@${winnerId}> وربح ${payout.toLocaleString("en-US")} ريال!`);
+    } else {
+      // تعادل
+      await updateBalanceWithLog(db, p1.id, p1.bet, " اكس او جماعي - تعادل");
+      await updateBalanceWithLog(db, p2.id, p2.bet, " اكس او جماعي - تعادل");
+      
+      await updateMultiplayerStats(p1.id, "multi_xo", false, p1.bet, 0);
+      await updateMultiplayerStats(p2.id, "multi_xo", false, p2.bet, 0);
+
+      embed.setColor("Grey").setDescription(` **انتهت بالتعادل!**\nتم استرجاع الرهانات لكلا اللاعبين.`);
+    }
+
+    setTimeout(() => i.message.delete().catch(() => {}), 45000);
+  } else {
+    embed.setColor("#a45eff").setDescription(`**اللاعبين:**\n❌ <@${Object.keys(game.players).find(id => game.players[id].symbol === 'X')}>\n⭕ <@${Object.keys(game.players).find(id => game.players[id].symbol === 'O')}>\n\n🎮 **الدور الآن على:** <@${game.turn}>`);
+  }
+
+  await i.message.edit({ embeds: [embed], components }).catch(() => {});
+}
+
+
+/******************************************
+ * 🙈 لعبة هايد (الغميمة) - نظام الأدوار (باتل رويال)
+ ******************************************/
+
+const hideGames = {}; // channelId -> game state
+
+// بناء أزرار اللعبة (4x4)
+function buildHideGrid(channelId, phase, revealedSpots = []) {
+  const rows = [];
+  for (let i = 0; i < 4; i++) {
+    const row = new ActionRowBuilder();
+    for (let j = 0; j < 4; j++) {
+      const idx = i * 4 + j;
+      const btn = new ButtonBuilder()
+        .setCustomId(`hide_${phase}_${channelId}_${idx}`)
+        .setStyle(ButtonStyle.Secondary);
+
+      if (phase === "seek" && revealedSpots.includes(idx)) {
+        btn.setLabel("-").setDisabled(true).setStyle(ButtonStyle.Danger);
+      } else {
+        btn.setLabel("\u200B"); // مسافة مخفية
+      }
+      row.addComponents(btn);
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+// 1. بدء اللعبة ومرحلة التخفي
+async function startHideGame(channelId) {
+  const lobby = activeLobbies[channelId];
+  if (!lobby || lobby.status !== "waiting") return;
+
+  const players = Object.entries(lobby.players)
+    .filter(([_, p]) => p.ready)
+    .map(([id, p]) => ({ id, username: p.username, bet: p.bet }));
+
+  if (players.length < 2) return;
+  lobby.status = "playing";
+
+  const game = {
+    channelId,
+    players,
+    alivePlayers: players.map(p => p.id), // قائمة بالأحياء
+    hidingSpots: {}, // userId -> buttonIndex
+    phase: "hide", // 'hide' or 'seek'
+    currentPlayer: null, // من عليه الدور الآن
+    revealed: [], // الأزرار اللي انفتحت
+    msg: null,
+    timer: null
+  };
+
+  hideGames[channelId] = game;
+
+  const embed = new EmbedBuilder()
+    .setTitle("🙈 لعبة هايد - مرحلة التخفي")
+    .setColor("#2b2d31")
+    .setDescription("معاكم **60 ثانية**! الكل يضغط على زر يختبئ وراه (عادي أكثر من شخص بنفس الزر).\n\n⚠️ اللي ما يختبئ راح ينطرد من الجولة.");
+
+  const components = buildHideGrid(channelId, "hide");
+
+  const channel = await client.channels.fetch(channelId);
+  game.msg = await channel.send({ embeds: [embed], components });
+
+  game.timer = setTimeout(() => {
+    transitionToSeekPhase(channelId);
+  }, 60000);
+}
+
+// 2. الانتقال لمرحلة البحث والأدوار
+async function transitionToSeekPhase(channelId) {
+  const game = hideGames[channelId];
+  if (!game) return;
+
+  if (game.timer) clearTimeout(game.timer);
+
+  // طرد اللي ما اختاروا مكان واسترجاع فلوسهم
+  const afkPlayers = game.players.filter(p => game.hidingSpots[p.id] === undefined);
+  for (const afk of afkPlayers) {
+    await addBalance(afk.id, afk.bet).catch(() => {});
+    game.alivePlayers = game.alivePlayers.filter(id => id !== afk.id);
+  }
+
+  // تحديث قائمة اللاعبين الفعليين
+  game.players = game.players.filter(p => game.hidingSpots[p.id] !== undefined);
+
+  if (game.alivePlayers.length < 2) {
+    for (const p of game.players) await addBalance(p.id, p.bet).catch(() => {});
+    delete hideGames[channelId];
+    return game.msg.edit({
+      content: "❌ تم إلغاء اللعبة لأن عدد المختبئين غير كافٍ.",
+      embeds: [],
+      components: []
+    }).catch(() => {});
+  }
+
+  game.phase = "seek";
+  // اختيار أول لاعب عشوائياً ليبدأ الدور
+  game.currentPlayer = game.alivePlayers[Math.floor(Math.random() * game.alivePlayers.length)];
+
+  const embed = new EmbedBuilder()
+    .setTitle("🕵️ لعبة هايد - مرحلة البحث")
+    .setColor("#ffcc00")
+    .setDescription(`انتهى وقت التخفي! وبدأ البحث.\n\n🎯 **الدور الآن على:** <@${game.currentPlayer}>\nاختار زر واحد تفتحه عشان تصيد الباقين!`);
+
+  const components = buildHideGrid(channelId, "seek");
+  await game.msg.edit({ embeds: [embed], components }).catch(() => {});
+
+  // مؤقت الدور (20 ثانية) إذا ما لعب يطرد
+  game.timer = setTimeout(() => handleTurnTimeout(channelId), 20000);
+}
+
+// دالة لمعالجة عدم تفاعل اللاعب في دوره
+async function handleTurnTimeout(channelId) {
+  const game = hideGames[channelId];
+  if (!game) return;
+
+  const timedOutPlayer = game.currentPlayer;
+  game.alivePlayers = game.alivePlayers.filter(id => id !== timedOutPlayer);
+  
+  const text = `⏳ <@${timedOutPlayer}> تأخر في فتح الزر وتم استبعاده!`;
+
+  if (game.alivePlayers.length <= 1) {
+    return finishHideGame(channelId, text);
+  }
+
+  nextTurn(channelId, text);
+}
+
+// دالة لتمرير الدور للاعب التالي
+function nextTurn(channelId, previousActionText) {
+  const game = hideGames[channelId];
+  if (!game) return;
+
+  if (game.timer) clearTimeout(game.timer);
+
+  // البحث عن اللاعب التالي في القائمة الأصلية بشرط يكون حي
+  let currentIdx = game.players.findIndex(p => p.id === game.currentPlayer);
+  let loops = 0;
+  do {
+    currentIdx = (currentIdx + 1) % game.players.length;
+    loops++;
+    if (loops > game.players.length) break; // حماية من التكرار اللانهائي
+  } while (!game.alivePlayers.includes(game.players[currentIdx].id));
+
+  game.currentPlayer = game.players[currentIdx].id;
+
+  const embed = new EmbedBuilder()
+    .setTitle("🕵️ لعبة هايد - مرحلة البحث")
+    .setColor("#ffcc00")
+    .setDescription(`${previousActionText}\n\n🎯 **الدور الآن على:** <@${game.currentPlayer}>\nاختار زر واحد تفتحه!`);
+
+  const components = buildHideGrid(channelId, "seek", game.revealed);
+  game.msg.edit({ embeds: [embed], components }).catch(() => {});
+
+  game.timer = setTimeout(() => handleTurnTimeout(channelId), 20000);
+}
+
+// 3. التعامل مع ضغطات الأزرار
+async function handleHideButtons(i) {
+  if (!i.isButton()) return;
+  const parts = i.customId.split("_"); // hide_{phase}_{channelId}_{idx}
+  const phase = parts[1];
+  const channelId = parts[2];
+  const idx = parseInt(parts[3]);
+
+  const game = hideGames[channelId];
+  if (!game) return i.reply({ content: "❌ اللعبة انتهت أو غير موجودة.", ephemeral: true });
+
+  const isPlaying = game.players.find(p => p.id === i.user.id);
+  if (!isPlaying) return i.reply({ content: "❌ أنت لست من ضمن هذه اللعبة!", ephemeral: true });
+
+  await i.deferUpdate().catch(() => {});
+
+  // -------- مرحلة التخفي --------
+  if (game.phase === "hide" && phase === "hide") {
+    game.hidingSpots[i.user.id] = idx;
+    
+    // فحص إذا الكل اختار مكانه عشان نتخطى الانتظار
+    if (Object.keys(game.hidingSpots).length === game.players.length) {
+      transitionToSeekPhase(channelId);
+    }
+    return;
+  }
+
+  // -------- مرحلة البحث --------
+  if (game.phase === "seek" && phase === "seek") {
+    // التأكد إن الدور على اللي ضغط
+    if (i.user.id !== game.currentPlayer) {
+      return i.followUp({ content: "⏳ اصبر، مو دورك!", ephemeral: true });
+    }
+
+    if (game.revealed.includes(idx)) return; // الزر مضغوط مسبقاً
+    
+    if (game.timer) clearTimeout(game.timer);
+    game.revealed.push(idx);
+
+    // التحقق من وجود مختبئين في هذا الزر (من اللاعبين الأحياء فقط)
+    const caughtPlayers = game.alivePlayers.filter(id => game.hidingSpots[id] === idx);
+    let resultText = `🕵️ <@${game.currentPlayer}> فتش الزر رقم ${idx + 1}...\n`;
+
+    if (caughtPlayers.length > 0) {
+      // إخراج من تم صيدهم
+      game.alivePlayers = game.alivePlayers.filter(id => !caughtPlayers.includes(id));
+      
+      const caughtMentions = caughtPlayers.map(id => `<@${id}>`).join(" و ");
+      
+      // إذا اللاعب فتش مكانه بالغلط (فضح نفسه)
+      if (caughtPlayers.includes(game.currentPlayer)) {
+        if (caughtPlayers.length === 1) {
+          resultText += `**وصاد نفسه!** 🤦‍♂️ فضح مكانه وطلع برا اللعبة!`;
+        } else {
+          // إذا صاد نفسه مع الباقين وصار عدد الأحياء صفر (هو اللي سحب الزناد فيفوز)
+          if (game.alivePlayers.length === 0) {
+            resultText += `**وصاد نفسه مع:** ${caughtMentions}! 💥 فجر المكان باللي فيه وحسم الجيم لصالحه!`;
+          } else {
+            resultText += `**وصاد نفسه مع:** ${caughtMentions}! 💥 فضح مكانه وطيرهم معاه!`;
+          }
+        }
+      } else {
+        resultText += `**وصاد:** ${caughtMentions}! 🎯 طلعوا برا اللعبة!`;
+      }
+    } else {
+      resultText += `ولقاه فاضي! 💨`;
+    }
+
+    // فحص الفوز: إذا بقى لاعب واحد فقط، أو إذا الكل ماتوا (مما يعني اللاعب الحالي فجر الكل معاه)
+    if (game.alivePlayers.length <= 1) {
+      // نرسل الـ currentPlayer كمعلومة إضافية عشان نتوجه كفائز لو صار "كاميكازي"
+      return finishHideGame(channelId, resultText, game.currentPlayer);
+    }
+
+    // إذا ما انتهت اللعبة، ننتقل للدور اللي بعده
+    nextTurn(channelId, resultText);
+  }
+}
+
+// 4. إنهاء اللعبة وتوزيع الجوائز
+async function finishHideGame(channelId, lastActionText, lastShooterId) {
+  const game = hideGames[channelId];
+  if (!game) return;
+
+  if (game.timer) clearTimeout(game.timer);
+
+  const totalPot = game.players.reduce((sum, p) => sum + p.bet, 0);
+  const embed = new EmbedBuilder();
+
+  let winnerId = null;
+
+  // تحديد الفائز
+  if (game.alivePlayers.length === 1) {
+    winnerId = game.alivePlayers[0]; // الناجي الأخير
+  } else if (game.alivePlayers.length === 0 && lastShooterId) {
+    winnerId = lastShooterId; // الكل مات في آخر ضربة! اللي ضغط الزر يفوز (تدمير ذاتي تكتيكي)
+  }
+
+  if (winnerId) {
+    const winner = game.players.find(p => p.id === winnerId);
+    const payout = Math.max(winner.bet * 2, totalPot);
+
+    await updateBalanceWithLog(db, winner.id, payout, "🙈 هايد جماعي - فوز");
+    await addBalance(winner.id, winner.bet); // استرداد الرهان
+    await updateMultiplayerStats(winner.id, "multi_hide", true, payout, 0);
+
+    // تسجيل الخسارة للباقين
+    for (const p of game.players) {
+      if (p.id !== winner.id) {
+        await db.collection("transactions").insertOne({ userId: p.id, amount: -p.bet, reason: "🙈 هايد جماعي - خسارة", timestamp: new Date() });
+        await updateMultiplayerStats(p.id, "multi_hide", false, 0, p.bet);
+      }
+    }
+
+    embed.setTitle("🏆 فائز واحد!")
+         .setColor("Green")
+         .setDescription(`${lastActionText}\n\nالناجي الأخير (أو اللي فجر الجميع) هو <@${winner.id}> 🎉\nربح الجائزة الكبرى: **${payout.toLocaleString("en-US")}** ريال! 💸`);
+  } else {
+    // حالة نادرة جداً لو الكل كانوا AFK ومافي أحد
+    embed.setTitle("🤝 تعادل!")
+         .setColor("Grey")
+         .setDescription(`${lastActionText}\n\nالكل طلعوا من اللعبة! تم استرجاع رهانات جميع اللاعبين.`);
+         
+    for (const p of game.players) {
+      await updateBalanceWithLog(db, p.id, p.bet, "🙈 هايد جماعي - تعادل");
+      await updateMultiplayerStats(p.id, "multi_hide", false, p.bet, 0);
+    }
+  }
+
+  // إظهار أماكن كل اللاعبين النهائية في الأزرار
+  const finalRows = [];
+  for (let i = 0; i < 4; i++) {
+    const row = new ActionRowBuilder();
+    for (let j = 0; j < 4; j++) {
+      const idx = i * 4 + j;
+      const btn = new ButtonBuilder().setCustomId(`end_${idx}`).setDisabled(true);
+      
+      const playersHere = Object.entries(game.hidingSpots).filter(([_, spot]) => spot === idx).map(([id]) => id);
+      if (playersHere.length > 0) {
+        btn.setLabel("👀").setStyle(ButtonStyle.Success);
+      } else {
+        btn.setLabel("-").setStyle(ButtonStyle.Secondary);
+      }
+      row.addComponents(btn);
+    }
+    finalRows.push(row);
+  }
+
+  await game.msg.edit({ embeds: [embed], components: finalRows }).catch(() => {});
+  delete hideGames[channelId];
+}
 ////////////////////////////////////////////
-// <:icons8correct1002:1415979896433278986> تريفيا - لعبة الاسئلة والاجوبة (مُدمجة مع الراوتر)
+// <:icons8correct1002:1415979896433278986> تريفيا - لعبة الاسئلة والاجوبة (محدثة للأسئلة والصور الجديدة)
 ////////////////////////////////////////////
 
 const triviaGames = {}; // channelId -> { round, used, scores, msg, timer, currentIndex }
+// تأكد أن ملف الأسئلة الجديد موجود في مجلد data واسمه questions.json
 const questions = JSON.parse(fs.readFileSync(path.join(__dirname, "data", "questions.json")));
 
 // بدء اللعبة عند رسالة "تريفيا"
@@ -6174,6 +6791,7 @@ async function nextTriviaRound(channelId) {
   if (!state) return;
 
   state.round += 1;
+  // عدد جولات التريفيا
   if (state.round > 5) return triviaEndGame(channelId);
 
   if (state.used.size === questions.length) state.used.clear();
@@ -6187,22 +6805,43 @@ async function nextTriviaRound(channelId) {
 
   const questionDoc = questions[index];
 
-  // صورة السؤال
-  const imagePath = path.join(__dirname, "images", "questions", questionDoc.image);
+  // 1. استخدام مسار الصور الجديد (المجلد: image)
+  const imagePath = path.join(__dirname, "image", `question_${questionDoc.id}.png`);
   const attachment = new AttachmentBuilder(imagePath);
 
-  // ازرار الاختيارات 1..4
+  // دالة لحماية الزر من تجاوز حد الديسكورد (80 حرف أقصى شيء)
+  const formatLabel = (num, text) => {
+    let label = `${num}- ${text}`;
+    if (label.length > 80) return label.substring(0, 77) + "...";
+    return label;
+  };
+
   const round = state.round;
-  const buttons = new ActionRowBuilder().addComponents(
-    [1, 2, 3, 4].map((num) =>
-      new ButtonBuilder()
-        .setCustomId(`trivia_answer_${round}_${num}`)
-        .setLabel(num.toString())
-        .setStyle(ButtonStyle.Secondary)
-    )
+  
+  // 2. وضع نصوص الخيارات داخل الأزرار مع ترتيبها في صفين (1-2) و (3-4)
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`trivia_answer_${round}_1`)
+      .setLabel(formatLabel(1, questionDoc.options[0]))
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`trivia_answer_${round}_2`)
+      .setLabel(formatLabel(2, questionDoc.options[1]))
+      .setStyle(ButtonStyle.Secondary)
   );
 
-  await state.msg.edit({ files: [attachment], components: [buttons], content: "" });
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`trivia_answer_${round}_3`)
+      .setLabel(formatLabel(3, questionDoc.options[2]))
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`trivia_answer_${round}_4`)
+      .setLabel(formatLabel(4, questionDoc.options[3]))
+      .setStyle(ButtonStyle.Secondary)
+  );
+
+  await state.msg.edit({ files: [attachment], components: [row1, row2], content: "" });
 
   // مؤقت 60 ثانية لانهاء اللعبة اذا لم تُجب اجابة صحيحة في هذه الجولة
   if (state.timer) clearTimeout(state.timer);
@@ -6210,14 +6849,13 @@ async function nextTriviaRound(channelId) {
     triviaEndGame(channelId);
   }, 60000);
 }
-
 // زر اجابة: trivia_answer_{round}_{choice}
 async function handleTriviaAnswerButton(i) {
   if (!i.customId.startsWith("trivia_answer_")) return;
 
   const parts = i.customId.split("_");
   const btnRound = parseInt(parts[2], 10);
-  const choice = parseInt(parts[3], 10);
+  const choice = parseInt(parts[3], 10); // رقم الزر 1 أو 2 أو 3 أو 4
 
   const channelId = i.channel.id;
   const state = triviaGames[channelId];
@@ -6232,7 +6870,19 @@ async function handleTriviaAnswerButton(i) {
     return i.reply({ content: "<:icons8wrong1001:1415979909825695914> حدث خطا في تحميل السؤال.", ephemeral: true });
   }
 
-  if (choice === questionDoc.answer) {
+  // 🛠️ الحل: دالة تنظيف النصوص من النقاط والفواصل والمسافات الزائدة
+  const cleanText = (str) => {
+    return String(str)
+      .trim()
+      .replace(/[.،!؟?]/g, '') // مسح أي علامات ترقيم تسبب عدم التطابق
+      .replace(/\s+/g, ' ');   // توحيد المسافات
+  };
+
+  // تطبيق التنظيف على خيار اللاعب والإجابة الصحيحة قبل المقارنة
+  const selectedAnswerText = cleanText(questionDoc.options[choice - 1]);
+  const correctAnswerText = cleanText(questionDoc.answer);
+
+  if (selectedAnswerText === correctAnswerText) {
     // تسجيل نقطة للضاغط
     const userId = i.user.id;
     state.scores.set(userId, (state.scores.get(userId) || 0) + 1);
@@ -6249,7 +6899,6 @@ async function handleTriviaAnswerButton(i) {
 
   return i.reply({ content: "<:icons8wrong1001:1415979909825695914> اجابتك غلط، حاول مرة اخرى.", ephemeral: true });
 }
-
 async function triviaEndGame(channelId) {
   const state = triviaGames[channelId];
   if (!state) return;
@@ -6262,19 +6911,19 @@ async function triviaEndGame(channelId) {
       ? top.map(([id, score], i) => `**${i + 1}. <@${id}>** — ${score} اجابات صحيحة`).join("\n")
       : "لا احد اجاب 😢";
 
-const buttons = new ActionRowBuilder().addComponents(
-  new ButtonBuilder()
-    .setCustomId("trivia_restart")
-    .setLabel("جولة جديدة")
-    .setStyle(ButtonStyle.Secondary)
-    .setEmoji({ id: "1407461810566860941", animated: true }),
+  const buttons = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("trivia_restart")
+      .setLabel("جولة جديدة")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji({ id: "1407461810566860941", animated: true }),
 
-  new ButtonBuilder()
-    .setCustomId("trivia_end")
-    .setLabel("انهاء")
-    .setStyle(ButtonStyle.Secondary)
-    .setEmoji("1415979909825695914")
-);
+    new ButtonBuilder()
+      .setCustomId("trivia_end")
+      .setLabel("انهاء")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji("1415979909825695914")
+  );
 
   await state.msg.edit({
     content: `🏁 **انتهت اللعبة!**\n\n${winners}`,
@@ -6295,7 +6944,6 @@ async function handleTriviaControlButtons(i) {
     delete triviaGames[i.channel.id];
   }
 }
-
 
 ////////////////////////////////////////////
 // 🎮 امر قمار الموحد (القائمة) — عبر الراوتر
@@ -6334,7 +6982,8 @@ async function handleGambleCategory(i) {
     { label: " صندوق الحظ", value: "solomystery", emoji: { id: "1407431521631076412", animated: true } },
     { label: " تحدي الاوراق", value: "solobus", emoji: { id: "1407431501792149546", animated: true } },
     { label: " بلاك جاك", value: "blackjack", emoji: { id: "1407431511564619797", animated: true } },
-    { label: " باكشوت", value: "buckshot", emoji: { id: "1407431387606290599", animated: true } }
+    { label: " باكشوت", value: "buckshot", emoji: { id: "1407431387606290599", animated: true } },
+    { label: " اكس او", value: "soloxo", emoji: { id: "1481411627738988674" } } // <== أضف هذا السطر
   ];
 
   const multiGames = [
@@ -6343,7 +6992,10 @@ async function handleGambleCategory(i) {
     { label: " روليت ", value: "multi_kicker", emoji: { id: "1407429268350439535", animated: true } },
     { label: " لعبة الالوان", value: "multi_colorwar", emoji: { id: "1408209314287452292", animated: true } },
     { label: "الغرفة المؤقتة", value: "multi_time", emoji: { id: "1407436102033211562", animated: true } },
-    { label: " القنبلة", value: "multi_bomb", emoji: { id: "1407436086329872488", animated: true } }
+    { label: " القنبلة", value: "multi_bomb", emoji: { id: "1407436086329872488", animated: true } },
+    { label: " اكس او", value: "multi_xo", emoji: { id: "1481411627738988674" } },
+    { label: "الاختباء", value: "multi_hide", emoji: { id: "1482274983689322606" } } // <== أضف هذا السطر
+
   ];
 
   const menu = new ActionRowBuilder().addComponents(
