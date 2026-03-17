@@ -94,7 +94,13 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
 }
 
 async function renderHarfBoard(baseLetters, definition, playerHand, playerName, isWin = false) {
-  const canvas = createCanvas(800, 600);
+  // --- حساب عدد الصفوف وتحديد طول الصورة الديناميكي ---
+  const maxPerRow = 5; // أقصى عدد حروف في الصف الواحد
+  const numRows = (!isWin && playerHand) ? Math.ceil(playerHand.length / maxPerRow) : 0;
+  
+  // الطول الأساسي 600. إذا زادت الصفوف عن 1، نزيد الطول 130 بكسل لكل صف إضافي
+  const canvasHeight = 600 + (numRows > 1 ? (numRows - 1) * 130 : 0); 
+  const canvas = createCanvas(800, canvasHeight);
   const ctx = canvas.getContext("2d");
 
   ctx.textAlign = "center";
@@ -102,64 +108,81 @@ async function renderHarfBoard(baseLetters, definition, playerHand, playerName, 
   ctx.direction = "rtl";
 
   if (isWin) {
-    ctx.font = "bold 45px Cairo";
-    ctx.fillStyle = "#2ecc71";
+    ctx.font = "bold 50px Cairo";
+    ctx.fillStyle = "#00682b";
     ctx.fillText(`🏆 الفائز: ${playerName}`, 400, 60);
   } else {
-    ctx.font = "bold 35px Cairo";
-    ctx.fillStyle = "#f1c40f";
+    ctx.font = "bold 50px Cairo";
+    ctx.fillStyle = "#e7c3ff";
     ctx.fillText(`دور اللاعب: ${playerName}`, 400, 50);
   }
 
-  ctx.font = "bold 25px Cairo";
+  ctx.font = "bold 40px Cairo";
   ctx.fillStyle = "#ffffff";
-  wrapText(ctx, definition, 400, 110, 700, 35);
+  wrapText(ctx, definition, 400, 145, 700, 75);
 
+  // --- القسم الأوسط (الحروف الأساسية) ---
   const boxSize = 140; 
   const gap = 25;
+  const baseY = 335; 
   const basePositions = [
-    { x: 400 + boxSize + gap, y: 300 }, 
-    { x: 400, y: 300 },                 
-    { x: 400 - boxSize - gap, y: 300 }  
+    { x: 400 + boxSize + gap, y: baseY }, 
+    { x: 400, y: baseY },                 
+    { x: 400 - boxSize - gap, y: baseY }  
   ];
 
   ctx.font = "bold 100px Cairo"; 
   for (let i = 0; i < 3; i++) {
-    ctx.fillStyle = "#4f545c"; 
+    ctx.fillStyle = "#3b3b3b"; 
     ctx.fillRect(basePositions[i].x - boxSize/2, basePositions[i].y - boxSize/2, boxSize, boxSize);
     
-    ctx.strokeStyle = "#23272a";
+    ctx.strokeStyle = "#161616";
     ctx.lineWidth = 5;
     ctx.strokeRect(basePositions[i].x - boxSize/2, basePositions[i].y - boxSize/2, boxSize, boxSize);
 
-    ctx.fillStyle = isWin ? "#2ecc71" : "#3498db"; 
-    ctx.fillText(baseLetters[i] || "", basePositions[i].x, basePositions[i].y + 10);
+    ctx.fillStyle = isWin ? "#146b38" : "#ded2ff"; 
+    // 👇 التعديل الأول: تم إزالة + 10 من هنا لتتوسط المربع
+    ctx.fillText(baseLetters[i] || "", basePositions[i].x, basePositions[i].y);
   }
 
+  // --- القسم السفلي (حروف اللاعب بنظام الصفوف) ---
   if (!isWin && playerHand && playerHand.length > 0) {
     const handBox = 110; 
     const handGap = 20;
-    const totalWidth = playerHand.length * handBox + (playerHand.length - 1) * handGap;
-    let currentX = 400 + totalWidth / 2 - handBox / 2; 
+    const rowGap = 20; // المسافة العمودية بين كل صف
+    const startY = 505; 
 
     ctx.font = "bold 70px Cairo"; 
-    for (let i = 0; i < playerHand.length; i++) {
-      ctx.fillStyle = "#313338";
-      ctx.fillRect(currentX - handBox/2, 480 - handBox/2, handBox, handBox); 
-      
-      ctx.strokeStyle = "#1e1f22";
-      ctx.lineWidth = 4;
-      ctx.strokeRect(currentX - handBox/2, 480 - handBox/2, handBox, handBox);
 
-      ctx.fillStyle = "#ffffff";
-      ctx.fillText(playerHand[i] || "", currentX, 480 + 10);
-      currentX -= (handBox + handGap);
+    // رسم الحروف على شكل صفوف
+    for (let r = 0; r < numRows; r++) {
+      const itemsInRow = Math.min(maxPerRow, playerHand.length - r * maxPerRow);
+      const rowWidth = itemsInRow * handBox + (itemsInRow - 1) * handGap;
+      
+      let currentX = 400 + rowWidth / 2 - handBox / 2; // توسيط هذا الصف
+      let currentY = startY + r * (handBox + rowGap); // ارتفاع هذا الصف
+
+      for (let c = 0; c < itemsInRow; c++) {
+        const i = r * maxPerRow + c;
+
+        ctx.fillStyle = "#3d3d3d";
+        ctx.fillRect(currentX - handBox/2, currentY - handBox/2, handBox, handBox); 
+        
+        ctx.strokeStyle = "#0e0e0e";
+        ctx.lineWidth = 4;
+        ctx.strokeRect(currentX - handBox/2, currentY - handBox/2, handBox, handBox);
+
+        ctx.fillStyle = "#ffffff";
+        // 👇 التعديل الثاني: تم إزالة + 10 من هنا لتتوسط المربع
+        ctx.fillText(playerHand[i] || "", currentX, currentY);
+        
+        currentX -= (handBox + handGap);
+      }
     }
   }
 
   return new AttachmentBuilder(await canvas.encode("png"), { name: "harf_board.png" });
 }
-
 // ==========================================
 // 4. دوال اللوبي والبداية
 // ==========================================
@@ -386,7 +409,6 @@ async function handleHarfInteraction(interaction) {
     
     game.isSwappingPhase = true;
     
-    // الرد الفوري قبل أي عملية تأخذ وقتاً (لتفادي Unknown Interaction)
     await interaction.reply({ content: "🔄 فعلت التبديل! اضغط على أي حرف من حروفك لاستبداله بحرف جديد.", flags: MessageFlags.Ephemeral });
 
     const msg = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
@@ -417,7 +439,6 @@ async function handleHarfInteraction(interaction) {
       hand[handIndex] = newLetter; 
       game.swapUsed[userId] = true; 
       
-      // الرد الفوري
       await interaction.reply({ content: `✅ تم تبديل الحرف **${letter}** بالحرف **${newLetter}**. استكمل دورك!`, flags: MessageFlags.Ephemeral });
       
       const msg = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
@@ -427,7 +448,6 @@ async function handleHarfInteraction(interaction) {
 
     game.selection = letter;
 
-    // الرد الفوري قبل تعديل الرسالة
     await interaction.reply({ content: `✅ اخترت الحرف **${letter}**، الآن اختر أي حرف أساسي لتبديله.`, flags: MessageFlags.Ephemeral });
 
     const msg = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
@@ -486,7 +506,6 @@ async function handleHarfInteraction(interaction) {
 
     game.selection = null;
     
-    // الرد الفوري قبل أي معالجة بالـ API
     await interaction.deferUpdate(); 
 
     const checkResult = await verifyWord(word);
@@ -494,7 +513,7 @@ async function handleHarfInteraction(interaction) {
     if (checkResult.valid) {
       game.letters[baseIndex] = newLetter;
       hand.splice(handIndex, 1); 
-      game.currentWordDefinition = `**${word}**: ${checkResult.definition}`;
+      game.currentWordDefinition = `${word}: ${checkResult.definition}`;
 
       clearTimeout(game.timer);
       game.turn = (game.turn + 1) % game.players.length;
@@ -589,7 +608,6 @@ async function handleVote(interaction) {
   const value = interaction.customId === "harf_vote_yes" ? "yes" : "no";
   voteData.votes[userId] = value;
 
-  // الرد الفوري
   await interaction.reply({ content: `🗳️ تم تسجيل صوتك: ${value === "yes" ? "موافق" : "رافض"}`, flags: MessageFlags.Ephemeral });
 
   const totalVotes = Object.keys(voteData.votes).length;
@@ -630,7 +648,7 @@ async function finishVote(channel) {
     ).catch(() => {});
 
     game.letters[baseIndex] = newLetter;
-    game.currentWordDefinition = `**${word}**: تم قبولها بتصويت اللاعبين.`;
+    game.currentWordDefinition = `${word}: تم قبولها بتصويت اللاعبين.`;
     const index = hand.indexOf(newLetter);
     if (index !== -1) hand.splice(index, 1);
   } else {
