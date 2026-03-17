@@ -14,7 +14,7 @@ const wordSchema = new mongoose.Schema({
 });
 const HarfWord = mongoose.models.HarfWord || mongoose.model("HarfWord", wordSchema);
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const genAI = new GoogleGenerativeAI("AIzaSyBiKTqG6Dax9Xd7gXyeRER4p5mdbKTH-7M");
 
 async function verifyWord(word) {
   try {
@@ -23,7 +23,7 @@ async function verifyWord(word) {
       return { valid: existing.isValid, definition: existing.definition };
     }
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
     const prompt = `هل الكلمة العربية "${word}" (مكونة من 3 حروف) صحيحة ولها معنى أو هي تصريف صحيح؟
 أجب في السطر الأول بكلمة "نعم" أو "لا" فقط.
 إذا كانت الإجابة نعم، اكتب في السطر الثاني تعريفاً مختصراً جداً للكلمة (لا يتجاوز 10 كلمات).`;
