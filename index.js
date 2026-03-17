@@ -128,8 +128,7 @@ assets.explosion = await loadImage(path.join(__dirname, "assets/templates/explos
 assets.mysterybox = await loadImage(path.join(__dirname, "assets/templates/mysterybox.png"));
 assets.closedbox = await loadImage(path.join(__dirname, "assets/templates/closedbox.png"));
 assets.roulletesolo = await loadImage(path.join(__dirname, "assets/templates/roulletesolo.png"));
-assets.harf_board = await loadImage(path.join(__dirname, "assets/templates/harf_board.png"));
-
+assets.harf_board = await loadImage(fs.readFileSync(path.join(__dirname, "assets/templates/harf_board.png")));
 }
 preloadAssets();
 
