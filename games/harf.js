@@ -14,7 +14,7 @@ const wordSchema = new mongoose.Schema({
 });
 const HarfWord = mongoose.models.HarfWord || mongoose.model("HarfWord", wordSchema);
 
-const genAI = new GoogleGenerativeAI("AIzaSyBiKTqG6Dax9Xd7gXyeRER4p5mdbKTH-7M");
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 async function verifyWord(word) {
   try {
