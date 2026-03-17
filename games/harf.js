@@ -1,5 +1,5 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, AttachmentBuilder } = require("discord.js");
-const { createCanvas, loadImage } = require("@napi-rs/canvas");
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder, EmbedBuilder } = require("discord.js");
+const { createCanvas } = require("@napi-rs/canvas");
 const mongoose = require("mongoose");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
@@ -7,7 +7,6 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 // 1. إعدادات قاعدة البيانات (MongoDB) والذكاء الاصطناعي (Gemini)
 // ==========================================
 
-// إعداد نموذج Mongoose لحفظ الكلمات ومعانيها
 const wordSchema = new mongoose.Schema({
   word: { type: String, required: true, unique: true },
   isValid: { type: Boolean, required: true },
@@ -15,19 +14,16 @@ const wordSchema = new mongoose.Schema({
 });
 const HarfWord = mongoose.models.HarfWord || mongoose.model("HarfWord", wordSchema);
 
-// إعداد Gemini API
-const genAI = new GoogleGenerativeAI("AIzaSyBiKTqG6Dax9Xd7gXyeRER4p5mdbKTH-7M");
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 async function verifyWord(word) {
   try {
-    // 1. التحقق من قاعدة البيانات أولاً لتوفير التوكنز
     const existing = await HarfWord.findOne({ word });
     if (existing) {
       return { valid: existing.isValid, definition: existing.definition };
     }
 
-    // 2. إذا لم تكن موجودة، نسأل Gemini
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     const prompt = `هل الكلمة العربية "${word}" (مكونة من 3 حروف) صحيحة ولها معنى أو هي تصريف صحيح؟
 أجب في السطر الأول بكلمة "نعم" أو "لا" فقط.
 إذا كانت الإجابة نعم، اكتب في السطر الثاني تعريفاً مختصراً جداً للكلمة (لا يتجاوز 10 كلمات).`;
@@ -38,13 +34,12 @@ async function verifyWord(word) {
     const isYes = responseText[0].includes("نعم");
     const definition = isYes && responseText[1] ? responseText[1].trim() : "لا يوجد تعريف متاح حالياً.";
 
-    // 3. حفظ النتيجة في MongoDB للمرات القادمة
     await HarfWord.create({ word, isValid: isYes, definition });
 
     return { valid: isYes, definition };
   } catch (err) {
     console.error("Gemini/DB Error:", err);
-    return { valid: false, definition: "حدث خطأ أثناء التحقق من الكلمة." }; // في حال الخطأ نعتبرها غير صالحة ليتم التصويت
+    return { valid: false, definition: "حدث خطأ أثناء التحقق من الكلمة." };
   }
 }
 
@@ -67,9 +62,9 @@ function startHarfGame(channelId) {
     turn: 0,
     timer: null,
     playerHands: {},
-    swapUsed: {}, // لتتبع استخدام ميزة التبديل لكل لاعب { userId: boolean }
-    isSwappingPhase: false, // لمعرفة ما إذا كان اللاعب الحالي في وضع تبديل حرف
-    currentWordDefinition: "ابدأ بتكوين أول كلمة!", // لحفظ تعريف الكلمة الحالية المعروضة
+    swapUsed: {}, 
+    isSwappingPhase: false, 
+    currentWordDefinition: "ابدأ بتكوين أول كلمة!", 
     history: [],
     votes: null,
   };
@@ -79,34 +74,99 @@ function startHarfGame(channelId) {
 // 3. الرسم على الصورة (Canvas)
 // ==========================================
 
-async function renderHarfBoard(baseLetters) {
-  // يرجى التأكد من إضافة الصورة 'harf_board.png' في مجلد templates الخاص بك
-  const bg = global.assets?.harf_board; 
-  const canvas = createCanvas(bg ? bg.width : 800, bg ? bg.height : 400);
+// دالة لتقسيم النص الطويل لأسطر داخل الـ Canvas
+function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
+  const words = text.split(' ');
+  let line = '';
+  let currentY = y;
+  for (let n = 0; n < words.length; n++) {
+    const testLine = line + words[n] + ' ';
+    const metrics = ctx.measureText(testLine);
+    if (metrics.width > maxWidth && n > 0) {
+      ctx.fillText(line, x, currentY);
+      line = words[n] + ' ';
+      currentY += lineHeight;
+    } else {
+      line = testLine;
+    }
+  }
+  ctx.fillText(line, x, currentY);
+}
+
+async function renderHarfBoard(baseLetters, definition, playerHand, playerName, isWin = false) {
+  const canvas = createCanvas(800, 600);
   const ctx = canvas.getContext("2d");
 
-  if (bg) {
-    ctx.drawImage(bg, 0, 0, canvas.width, canvas.height);
-  } else {
-    // خلفية احتياطية في حال عدم وجود الصورة
-    ctx.fillStyle = "#2b2d31";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-  }
+  // الخلفية
+  ctx.fillStyle = "#2b2d31";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 80px Cairo"; // تأكد من تحميل خط Cairo في الانديكس
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
+  ctx.direction = "rtl";
 
-  // إحداثيات رسم الحروف الثلاثة الأساسية (يمكنك تعديل الـ x و y لتناسب قالبك)
-  const positions = [
-    { x: canvas.width / 2 + 150, y: canvas.height / 2 }, // الحرف الأول (يمين)
-    { x: canvas.width / 2, y: canvas.height / 2 },       // الحرف الأوسط
-    { x: canvas.width / 2 - 150, y: canvas.height / 2 }  // الحرف الثالث (يسار)
+  // --- 1. القسم العلوي (التعريف واسم اللاعب) ---
+  if (isWin) {
+    ctx.font = "bold 45px Cairo";
+    ctx.fillStyle = "#2ecc71";
+    ctx.fillText(`🏆 الفائز: ${playerName}`, 400, 60);
+  } else {
+    ctx.font = "bold 35px Cairo";
+    ctx.fillStyle = "#f1c40f";
+    ctx.fillText(`دور اللاعب: ${playerName}`, 400, 50);
+  }
+
+  ctx.font = "bold 25px Cairo";
+  ctx.fillStyle = "#ffffff";
+  wrapText(ctx, definition, 400, 110, 700, 35);
+
+  // --- 2. القسم الأوسط (الحروف الأساسية) ---
+  const boxSize = 110;
+  const gap = 20;
+  // الإحداثيات لتناسب اللغة العربية (اليمين أولاً)
+  const basePositions = [
+    { x: 400 + boxSize + gap, y: 300 }, // الحرف الأول (يمين)
+    { x: 400, y: 300 },                 // الحرف الثاني (وسط)
+    { x: 400 - boxSize - gap, y: 300 }  // الحرف الثالث (يسار)
   ];
 
+  ctx.font = "bold 80px Cairo";
   for (let i = 0; i < 3; i++) {
-    ctx.fillText(baseLetters[i] || "", positions[i].x, positions[i].y);
+    ctx.fillStyle = "#4f545c"; // لون المربع
+    ctx.fillRect(basePositions[i].x - boxSize/2, basePositions[i].y - boxSize/2, boxSize, boxSize);
+    
+    ctx.strokeStyle = "#23272a";
+    ctx.lineWidth = 4;
+    ctx.strokeRect(basePositions[i].x - boxSize/2, basePositions[i].y - boxSize/2, boxSize, boxSize);
+
+    ctx.fillStyle = isWin ? "#2ecc71" : "#3498db"; // لون الحرف
+    ctx.fillText(baseLetters[i] || "", basePositions[i].x, basePositions[i].y + 10);
+  }
+
+  // --- 3. القسم السفلي (حروف اللاعب) ---
+  if (!isWin && playerHand && playerHand.length > 0) {
+    ctx.font = "bold 40px Cairo";
+    ctx.fillStyle = "#e67e22";
+    ctx.fillText("حروفك:", 400, 430);
+
+    const handBox = 80;
+    const handGap = 15;
+    const totalWidth = playerHand.length * handBox + (playerHand.length - 1) * handGap;
+    let currentX = 400 + totalWidth / 2 - handBox / 2; // البدء من اليمين للمحاذاة
+
+    ctx.font = "bold 50px Cairo";
+    for (let i = 0; i < playerHand.length; i++) {
+      ctx.fillStyle = "#313338";
+      ctx.fillRect(currentX - handBox/2, 510 - handBox/2, handBox, handBox);
+      
+      ctx.strokeStyle = "#1e1f22";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(currentX - handBox/2, 510 - handBox/2, handBox, handBox);
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(playerHand[i] || "", currentX, 510 + 10);
+      currentX -= (handBox + handGap);
+    }
   }
 
   return new AttachmentBuilder(await canvas.encode("png"), { name: "harf_board.png" });
@@ -179,7 +239,7 @@ async function handleHarfLobbyInteraction(interaction) {
 async function updateHarfLobbyMessage(interaction) {
   const game = activeHarfGames[interaction.channel.id];
   if (!game) return;
-  // التحديث كما في الكود السابق
+  
   const embed = new EmbedBuilder()
     .setTitle("🎮 لعبة: حرف")
     .setDescription(`👥 اللاعبين في اللوبي:
@@ -238,7 +298,7 @@ async function startHarfMatch(channel) {
 }
 
 // ==========================================
-// 5. إدارة الأدوار والتفاعل
+// 5. إدارة الأدوار والتفاعل (بدون إيمبيد)
 // ==========================================
 
 async function showHarfTurn(channel) {
@@ -247,8 +307,9 @@ async function showHarfTurn(channel) {
 
   const currentPlayer = game.players[game.turn];
   const currentId = currentPlayer.id;
-  game.isSwappingPhase = false; // إعادة تعيين وضع التبديل مع بداية كل دور
+  game.isSwappingPhase = false; 
 
+  // الأزرار الأساسية (نفس الكود الأصلي: ترتيب عكسي لتظهر بالديسكورد RTL)
   const baseRow = new ActionRowBuilder();
   for (let i = game.letters.length - 1; i >= 0; i--) {
     baseRow.addComponents(
@@ -260,14 +321,13 @@ async function showHarfTurn(channel) {
     );
   }
 
-  // إضافة أزرار التحكم الجانبية (تبديل وانسحاب)
   baseRow.addComponents(
     new ButtonBuilder()
       .setCustomId("harf_swap")
       .setLabel("تبديل")
       .setStyle(ButtonStyle.Success)
-      .setEmoji("1416507901425614948") // إيموجي التبديل
-      .setDisabled(game.swapUsed[currentId]), // معطل إذا استخدمه مسبقاً
+      .setEmoji("1416507901425614948") 
+      .setDisabled(game.swapUsed[currentId]),
       
     new ButtonBuilder()
       .setCustomId("harf_quit")
@@ -293,17 +353,16 @@ async function showHarfTurn(channel) {
     handRows.push(row);
   }
 
-  const attachment = await renderHarfBoard(game.letters);
-
-  const embed = new EmbedBuilder()
-    .setTitle(`✏️ دور ${currentPlayer.username}`)
-    .setDescription(`📖 **الكلمة السابقة:** ${game.currentWordDefinition}\n\n🎯 كون كلمة ثلاثية، أو استخدم زر **تبديل** لتغيير أحد حروفك.
-⏳ لديك 60 ثانية لاتخاذ القرار.`)
-    .setColor("#3498db");
+  // رسم الـ Canvas بدون إيمبيد
+  const attachment = await renderHarfBoard(
+    game.letters, 
+    game.currentWordDefinition, 
+    playerHand, 
+    currentPlayer.username
+  );
 
   const msg = await channel.send({
-    content: `🎮 <@${currentId}> دورك الآن`,
-    embeds: [embed],
+    content: `🎮 <@${currentId}> دورك الآن (لديك 60 ثانية)`,
     files: [attachment],
     components: [baseRow, ...handRows]
   });
@@ -334,21 +393,20 @@ async function handleHarfInteraction(interaction) {
     
     game.isSwappingPhase = true;
     
-    // تعطيل زر التبديل وتفعيل الحروف ليختار اللاعب الحرف الذي يريد تبديله
     const msg = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
     if (msg) {
         const components = msg.components.map(row => {
             return new ActionRowBuilder().addComponents(
                 row.components.map(btn => {
                     const newBtn = ButtonBuilder.from(btn);
-                    if (btn.customId === "harf_swap") newBtn.setDisabled(true);
+                    if (btn.data.custom_id === "harf_swap") newBtn.setDisabled(true);
                     return newBtn;
                 })
             );
         });
         await msg.edit({ components });
     }
-    return interaction.reply({ content: "🔄 لقد فعلت التبديل! اضغط على أي حرف من حروفك لاستبداله بحرف جديد.", ephemeral: true });
+    return interaction.reply({ content: "🔄 فعلت التبديل! اضغط على أي حرف من حروفك لاستبداله بحرف جديد.", ephemeral: true });
   }
 
   // --- اختيار حرف من اليد ---
@@ -357,23 +415,20 @@ async function handleHarfInteraction(interaction) {
     const hand = game.playerHands[userId];
     const handIndex = hand.indexOf(letter);
     
-    // إذا كان اللاعب في وضع التبديل
     if (game.isSwappingPhase) {
       if (handIndex === -1) return interaction.reply({ content: "خطأ، الحرف غير موجود.", ephemeral: true });
       
       const newLetter = getRandomArabicLetter();
-      hand[handIndex] = newLetter; // استبدال الحرف
-      game.swapUsed[userId] = true; // تسجيل الاستخدام
+      hand[handIndex] = newLetter; 
+      game.swapUsed[userId] = true; 
       
       await interaction.reply({ content: `✅ تم تبديل الحرف **${letter}** بالحرف **${newLetter}**. استكمل دورك!`, ephemeral: true });
       
-      // إعادة عرض الدور بنفس حالة الوقت
       const msg = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
       if (msg) await msg.delete().catch(() => {});
       return showHarfTurn(interaction.channel);
     }
 
-    // إذا كان لعباً طبيعياً
     game.selection = letter;
     const msg = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
 
@@ -389,7 +444,6 @@ async function handleHarfInteraction(interaction) {
         );
       }
       
-      // تعطيل زر التبديل عند بدء اختيار الكلمة لمنع اللخبطة
       baseRow.addComponents(
         new ButtonBuilder().setCustomId("harf_swap").setLabel("تبديل").setStyle(ButtonStyle.Success).setDisabled(true),
         new ButtonBuilder().setCustomId("harf_quit").setLabel("انسحاب").setStyle(ButtonStyle.Danger)
@@ -425,46 +479,47 @@ async function handleHarfInteraction(interaction) {
     const baseIndex = parseInt(interaction.customId.split("_")[2]);
     const oldLetter = game.letters[baseIndex];
     const newLetter = game.selection;
+    
+    // الانتباه للترتيب الأصلي بدون قلب المصفوفة
     const trialWordArr = [...game.letters];
     trialWordArr[baseIndex] = newLetter;
-    
-    // الانتباه للترتيب: الحروف الأساسية معروضة من اليمين لليسار
-    const word = trialWordArr.reverse().join(""); 
+    const word = trialWordArr.join(""); 
 
     const hand = game.playerHands[userId];
     const handIndex = hand.indexOf(newLetter);
     if (handIndex === -1) return interaction.reply({ content: "حدث خطأ، الحرف غير موجود في يدك.", ephemeral: true });
 
     game.selection = null;
-    await interaction.deferUpdate(); // تأجيل الرد لأن الفحص قد يأخذ بضع ثوانٍ
+    await interaction.deferUpdate(); 
 
-    // التحقق من الكلمة باستخدام الذكاء الاصطناعي/MongoDB
     const checkResult = await verifyWord(word);
 
     if (checkResult.valid) {
       game.letters[baseIndex] = newLetter;
       hand.splice(handIndex, 1); 
-      game.currentWordDefinition = `**${word}**: ${checkResult.definition}`; // حفظ التعريف لعرضه
+      game.currentWordDefinition = `**${word}**: ${checkResult.definition}`;
 
       clearTimeout(game.timer);
       game.turn = (game.turn + 1) % game.players.length;
 
-      // فوز اللاعب
-      if (hand.length === 0) {
-        delete activeHarfGames[interaction.channel.id];
-        const winEmbed = new EmbedBuilder()
-            .setTitle("🏆 نهاية المباراة!")
-            .setColor("Green")
-            .setDescription(`الكلمة الأخيرة كانت: **${word}**\n📖 تعريفها: ${checkResult.definition}\n\n**الفائز هو: <@${userId}> 🎉**`);
-        return interaction.channel.send({ embeds: [winEmbed] });
-      }
-
       const msg = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
       if (msg) await msg.delete().catch(() => {});
 
+      // فوز اللاعب (إرسال صورة نهائية فقط بدون إيمبيد)
+      if (hand.length === 0) {
+        delete activeHarfGames[interaction.channel.id];
+        const winAttachment = await renderHarfBoard(
+          game.letters, 
+          game.currentWordDefinition, 
+          [], 
+          currentPlayer.username, 
+          true // تفعيل وضع الفوز
+        );
+        return interaction.channel.send({ content: `🎉 مبروك الفوز <@${userId}>!`, files: [winAttachment] });
+      }
+
       return showHarfTurn(interaction.channel);
     } else {
-      // إذا فشل الفحص، نلجأ للتصويت كنظام حماية (Fallback)
       return startVotingOnInvalidWord(interaction, word, baseIndex, newLetter, checkResult.definition);
     }
   }
@@ -559,6 +614,7 @@ async function finishVote(channel) {
   const no = Object.values(votes).filter(v => v === "no").length;
 
   const hand = game.playerHands[by];
+  const currentPlayer = game.players.find(p => p.id === by);
 
   const resultMessage = yes > no
     ? `✅ تم قبول الكلمة بأغلبية (${yes} مقابل ${no})`
@@ -571,7 +627,6 @@ async function finishVote(channel) {
   if (voteMsg) await voteMsg.delete().catch(() => {});
 
   if (yes > no) {
-    // حفظ الكلمة في الداتابيس حتى لا نحتاج للتصويت عليها المرة القادمة!
     await HarfWord.updateOne(
         { word },
         { $set: { isValid: true, definition: "تم إضافتها عبر تصويت اللاعبين." } },
@@ -596,11 +651,14 @@ async function finishVote(channel) {
 
   if (hand.length === 0) {
     delete activeHarfGames[channel.id];
-    const winEmbed = new EmbedBuilder()
-        .setTitle("🏆 نهاية المباراة!")
-        .setColor("Green")
-        .setDescription(`**الفائز هو: <@${by}> 🎉**`);
-    return channel.send({ embeds: [winEmbed] });
+    const winAttachment = await renderHarfBoard(
+      game.letters, 
+      game.currentWordDefinition, 
+      [], 
+      currentPlayer.username, 
+      true
+    );
+    return channel.send({ content: `🎉 مبروك الفوز <@${by}>!`, files: [winAttachment] });
   }
 
   return showHarfTurn(channel);
