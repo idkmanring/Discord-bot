@@ -39,7 +39,9 @@ async function verifyWord(word) {
     return { valid: isYes, definition };
   } catch (err) {
     console.error("Gemini/DB Error:", err);
-    return { valid: false, definition: "حدث خطأ أثناء التحقق من الكلمة." };
+    // جلب رسالة الخطأ الحقيقية لتسهيل حل المشكلة من داخل ديسكورد
+    const errorReason = err.message ? err.message.substring(0, 50) : "غير معروف";
+    return { valid: false, definition: `خطأ تقني: ${errorReason} (راجع الكونسول)` };
   }
 }
 
@@ -74,7 +76,6 @@ function startHarfGame(channelId) {
 // 3. الرسم على الصورة (Canvas)
 // ==========================================
 
-// دالة لتقسيم النص الطويل لأسطر داخل الـ Canvas
 function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
   const words = text.split(' ');
   let line = '';
@@ -97,9 +98,7 @@ async function renderHarfBoard(baseLetters, definition, playerHand, playerName, 
   const canvas = createCanvas(800, 600);
   const ctx = canvas.getContext("2d");
 
-  // الخلفية
-  ctx.fillStyle = "#2b2d31";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // ملاحظة: قمنا بإزالة لون الخلفية لتصبح شفافة تماماً
 
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -121,50 +120,47 @@ async function renderHarfBoard(baseLetters, definition, playerHand, playerName, 
   wrapText(ctx, definition, 400, 110, 700, 35);
 
   // --- 2. القسم الأوسط (الحروف الأساسية) ---
-  const boxSize = 110;
-  const gap = 20;
-  // الإحداثيات لتناسب اللغة العربية (اليمين أولاً)
+  const boxSize = 140; // تم تكبير المربع
+  const gap = 25;
   const basePositions = [
-    { x: 400 + boxSize + gap, y: 300 }, // الحرف الأول (يمين)
-    { x: 400, y: 300 },                 // الحرف الثاني (وسط)
-    { x: 400 - boxSize - gap, y: 300 }  // الحرف الثالث (يسار)
+    { x: 400 + boxSize + gap, y: 300 }, 
+    { x: 400, y: 300 },                 
+    { x: 400 - boxSize - gap, y: 300 }  
   ];
 
-  ctx.font = "bold 80px Cairo";
+  ctx.font = "bold 100px Cairo"; // تم تكبير الخط
   for (let i = 0; i < 3; i++) {
-    ctx.fillStyle = "#4f545c"; // لون المربع
+    ctx.fillStyle = "#4f545c"; 
     ctx.fillRect(basePositions[i].x - boxSize/2, basePositions[i].y - boxSize/2, boxSize, boxSize);
     
     ctx.strokeStyle = "#23272a";
-    ctx.lineWidth = 4;
+    ctx.lineWidth = 5;
     ctx.strokeRect(basePositions[i].x - boxSize/2, basePositions[i].y - boxSize/2, boxSize, boxSize);
 
-    ctx.fillStyle = isWin ? "#2ecc71" : "#3498db"; // لون الحرف
+    ctx.fillStyle = isWin ? "#2ecc71" : "#3498db"; 
     ctx.fillText(baseLetters[i] || "", basePositions[i].x, basePositions[i].y + 10);
   }
 
   // --- 3. القسم السفلي (حروف اللاعب) ---
   if (!isWin && playerHand && playerHand.length > 0) {
-    ctx.font = "bold 40px Cairo";
-    ctx.fillStyle = "#e67e22";
-    ctx.fillText("حروفك:", 400, 430);
+    // تم إزالة جملة "حروفك:"
 
-    const handBox = 80;
-    const handGap = 15;
+    const handBox = 110; // تم تكبير المربع الخاص باللاعب
+    const handGap = 20;
     const totalWidth = playerHand.length * handBox + (playerHand.length - 1) * handGap;
-    let currentX = 400 + totalWidth / 2 - handBox / 2; // البدء من اليمين للمحاذاة
+    let currentX = 400 + totalWidth / 2 - handBox / 2; 
 
-    ctx.font = "bold 50px Cairo";
+    ctx.font = "bold 70px Cairo"; // تم تكبير خط اللاعب
     for (let i = 0; i < playerHand.length; i++) {
       ctx.fillStyle = "#313338";
-      ctx.fillRect(currentX - handBox/2, 510 - handBox/2, handBox, handBox);
+      ctx.fillRect(currentX - handBox/2, 480 - handBox/2, handBox, handBox); // رفعناها قليلاً للأعلى
       
       ctx.strokeStyle = "#1e1f22";
-      ctx.lineWidth = 3;
-      ctx.strokeRect(currentX - handBox/2, 510 - handBox/2, handBox, handBox);
+      ctx.lineWidth = 4;
+      ctx.strokeRect(currentX - handBox/2, 480 - handBox/2, handBox, handBox);
 
       ctx.fillStyle = "#ffffff";
-      ctx.fillText(playerHand[i] || "", currentX, 510 + 10);
+      ctx.fillText(playerHand[i] || "", currentX, 480 + 10);
       currentX -= (handBox + handGap);
     }
   }
@@ -309,7 +305,6 @@ async function showHarfTurn(channel) {
   const currentId = currentPlayer.id;
   game.isSwappingPhase = false; 
 
-  // الأزرار الأساسية (نفس الكود الأصلي: ترتيب عكسي لتظهر بالديسكورد RTL)
   const baseRow = new ActionRowBuilder();
   for (let i = game.letters.length - 1; i >= 0; i--) {
     baseRow.addComponents(
@@ -353,7 +348,6 @@ async function showHarfTurn(channel) {
     handRows.push(row);
   }
 
-  // رسم الـ Canvas بدون إيمبيد
   const attachment = await renderHarfBoard(
     game.letters, 
     game.currentWordDefinition, 
@@ -387,7 +381,6 @@ async function handleHarfInteraction(interaction) {
     return interaction.reply({ content: "ليس دورك!", ephemeral: true });
   }
 
-  // --- زر التبديل ---
   if (interaction.customId === "harf_swap") {
     if (game.swapUsed[userId]) return interaction.reply({ content: "لقد استخدمت التبديل مسبقاً في هذه المباراة.", ephemeral: true });
     
@@ -409,7 +402,6 @@ async function handleHarfInteraction(interaction) {
     return interaction.reply({ content: "🔄 فعلت التبديل! اضغط على أي حرف من حروفك لاستبداله بحرف جديد.", ephemeral: true });
   }
 
-  // --- اختيار حرف من اليد ---
   if (interaction.customId.startsWith("harf_play_")) {
     const letter = interaction.customId.split("_")[2];
     const hand = game.playerHands[userId];
@@ -472,7 +464,6 @@ async function handleHarfInteraction(interaction) {
     return interaction.reply({ content: `✅ اخترت الحرف **${letter}**، الآن اختر أي حرف أساسي لتبديله.`, ephemeral: true });
   }
 
-  // --- اختيار حرف أساسي (تكوين الكلمة) ---
   if (interaction.customId.startsWith("harf_base_")) {
     if (!game.selection) return interaction.reply({ content: "اختر حرف من حروفك أولًا.", ephemeral: true });
 
@@ -480,7 +471,6 @@ async function handleHarfInteraction(interaction) {
     const oldLetter = game.letters[baseIndex];
     const newLetter = game.selection;
     
-    // الانتباه للترتيب الأصلي بدون قلب المصفوفة
     const trialWordArr = [...game.letters];
     trialWordArr[baseIndex] = newLetter;
     const word = trialWordArr.join(""); 
@@ -505,7 +495,6 @@ async function handleHarfInteraction(interaction) {
       const msg = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
       if (msg) await msg.delete().catch(() => {});
 
-      // فوز اللاعب (إرسال صورة نهائية فقط بدون إيمبيد)
       if (hand.length === 0) {
         delete activeHarfGames[interaction.channel.id];
         const winAttachment = await renderHarfBoard(
@@ -513,7 +502,7 @@ async function handleHarfInteraction(interaction) {
           game.currentWordDefinition, 
           [], 
           currentPlayer.username, 
-          true // تفعيل وضع الفوز
+          true
         );
         return interaction.channel.send({ content: `🎉 مبروك الفوز <@${userId}>!`, files: [winAttachment] });
       }
@@ -524,7 +513,6 @@ async function handleHarfInteraction(interaction) {
     }
   }
 
-  // --- زر الانسحاب ---
   if (interaction.customId === "harf_quit") {
     game.players = game.players.filter(p => p.id !== userId);
     delete game.playerHands[userId];
