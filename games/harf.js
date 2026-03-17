@@ -1,4 +1,4 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder, EmbedBuilder } = require("discord.js");
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder, EmbedBuilder, MessageFlags } = require("discord.js");
 const { createCanvas } = require("@napi-rs/canvas");
 const mongoose = require("mongoose");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -39,7 +39,6 @@ async function verifyWord(word) {
     return { valid: isYes, definition };
   } catch (err) {
     console.error("Gemini/DB Error:", err);
-    // جلب رسالة الخطأ الحقيقية لتسهيل حل المشكلة من داخل ديسكورد
     const errorReason = err.message ? err.message.substring(0, 50) : "غير معروف";
     return { valid: false, definition: `خطأ تقني: ${errorReason} (راجع الكونسول)` };
   }
@@ -98,13 +97,10 @@ async function renderHarfBoard(baseLetters, definition, playerHand, playerName, 
   const canvas = createCanvas(800, 600);
   const ctx = canvas.getContext("2d");
 
-  // ملاحظة: قمنا بإزالة لون الخلفية لتصبح شفافة تماماً
-
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.direction = "rtl";
 
-  // --- 1. القسم العلوي (التعريف واسم اللاعب) ---
   if (isWin) {
     ctx.font = "bold 45px Cairo";
     ctx.fillStyle = "#2ecc71";
@@ -119,8 +115,7 @@ async function renderHarfBoard(baseLetters, definition, playerHand, playerName, 
   ctx.fillStyle = "#ffffff";
   wrapText(ctx, definition, 400, 110, 700, 35);
 
-  // --- 2. القسم الأوسط (الحروف الأساسية) ---
-  const boxSize = 140; // تم تكبير المربع
+  const boxSize = 140; 
   const gap = 25;
   const basePositions = [
     { x: 400 + boxSize + gap, y: 300 }, 
@@ -128,7 +123,7 @@ async function renderHarfBoard(baseLetters, definition, playerHand, playerName, 
     { x: 400 - boxSize - gap, y: 300 }  
   ];
 
-  ctx.font = "bold 100px Cairo"; // تم تكبير الخط
+  ctx.font = "bold 100px Cairo"; 
   for (let i = 0; i < 3; i++) {
     ctx.fillStyle = "#4f545c"; 
     ctx.fillRect(basePositions[i].x - boxSize/2, basePositions[i].y - boxSize/2, boxSize, boxSize);
@@ -141,19 +136,16 @@ async function renderHarfBoard(baseLetters, definition, playerHand, playerName, 
     ctx.fillText(baseLetters[i] || "", basePositions[i].x, basePositions[i].y + 10);
   }
 
-  // --- 3. القسم السفلي (حروف اللاعب) ---
   if (!isWin && playerHand && playerHand.length > 0) {
-    // تم إزالة جملة "حروفك:"
-
-    const handBox = 110; // تم تكبير المربع الخاص باللاعب
+    const handBox = 110; 
     const handGap = 20;
     const totalWidth = playerHand.length * handBox + (playerHand.length - 1) * handGap;
     let currentX = 400 + totalWidth / 2 - handBox / 2; 
 
-    ctx.font = "bold 70px Cairo"; // تم تكبير خط اللاعب
+    ctx.font = "bold 70px Cairo"; 
     for (let i = 0; i < playerHand.length; i++) {
       ctx.fillStyle = "#313338";
-      ctx.fillRect(currentX - handBox/2, 480 - handBox/2, handBox, handBox); // رفعناها قليلاً للأعلى
+      ctx.fillRect(currentX - handBox/2, 480 - handBox/2, handBox, handBox); 
       
       ctx.strokeStyle = "#1e1f22";
       ctx.lineWidth = 4;
@@ -203,30 +195,38 @@ async function handleHarfLobbyInteraction(interaction) {
   const userId = interaction.user.id;
 
   if (interaction.customId === "harf_join") {
-    if (game.players.find(p => p.id === userId)) return interaction.reply({ content: "أنت بالفعل في اللوبي.", ephemeral: true });
-    if (game.players.length >= 4) return interaction.reply({ content: "اللوبي ممتلئ.", ephemeral: true });
+    if (game.players.find(p => p.id === userId)) return interaction.reply({ content: "أنت بالفعل في اللوبي.", flags: MessageFlags.Ephemeral });
+    if (game.players.length >= 4) return interaction.reply({ content: "اللوبي ممتلئ.", flags: MessageFlags.Ephemeral });
+
+    await interaction.deferUpdate(); // الرد الفوري لتفادي الخطأ
 
     game.players.push({ id: userId, username: interaction.user.username });
     if (!game.hostId) game.hostId = userId;
     await updateHarfLobbyMessage(interaction);
-    return interaction.deferUpdate();
+    return;
   }
 
   if (interaction.customId === "harf_leave") {
     const index = game.players.findIndex(p => p.id === userId);
-    if (index === -1) return interaction.reply({ content: "أنت لست في اللوبي.", ephemeral: true });
+    if (index === -1) return interaction.reply({ content: "أنت لست في اللوبي.", flags: MessageFlags.Ephemeral });
+
+    await interaction.deferUpdate(); // الرد الفوري لتفادي الخطأ
 
     game.players.splice(index, 1);
     if (game.players.length === 0) {
       delete activeHarfGames[interaction.channel.id];
-      return interaction.message.delete().catch(() => {});
+      const msg = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
+      if (msg) return msg.delete().catch(() => {});
+      return;
     }
     await updateHarfLobbyMessage(interaction);
-    return interaction.deferUpdate();
+    return;
   }
 
   if (interaction.customId === "harf_start") {
-    if (game.players.length < 2) return interaction.reply({ content: "تحتاج على الأقل إلى لاعبين.", ephemeral: true });
+    if (game.players.length < 2) return interaction.reply({ content: "تحتاج على الأقل إلى لاعبين.", flags: MessageFlags.Ephemeral });
+    
+    await interaction.deferUpdate(); // الرد الفوري لتفادي الخطأ
     game.state = "playing";
     return startHarfMatch(interaction.channel);
   }
@@ -294,7 +294,7 @@ async function startHarfMatch(channel) {
 }
 
 // ==========================================
-// 5. إدارة الأدوار والتفاعل (بدون إيمبيد)
+// 5. إدارة الأدوار والتفاعل
 // ==========================================
 
 async function showHarfTurn(channel) {
@@ -378,14 +378,17 @@ async function handleHarfInteraction(interaction) {
   const userId = interaction.user.id;
   const currentPlayer = game.players[game.turn];
   if (userId !== currentPlayer.id) {
-    return interaction.reply({ content: "ليس دورك!", ephemeral: true });
+    return interaction.reply({ content: "ليس دورك!", flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.customId === "harf_swap") {
-    if (game.swapUsed[userId]) return interaction.reply({ content: "لقد استخدمت التبديل مسبقاً في هذه المباراة.", ephemeral: true });
+    if (game.swapUsed[userId]) return interaction.reply({ content: "لقد استخدمت التبديل مسبقاً في هذه المباراة.", flags: MessageFlags.Ephemeral });
     
     game.isSwappingPhase = true;
     
+    // الرد الفوري قبل أي عملية تأخذ وقتاً (لتفادي Unknown Interaction)
+    await interaction.reply({ content: "🔄 فعلت التبديل! اضغط على أي حرف من حروفك لاستبداله بحرف جديد.", flags: MessageFlags.Ephemeral });
+
     const msg = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
     if (msg) {
         const components = msg.components.map(row => {
@@ -399,7 +402,7 @@ async function handleHarfInteraction(interaction) {
         });
         await msg.edit({ components });
     }
-    return interaction.reply({ content: "🔄 فعلت التبديل! اضغط على أي حرف من حروفك لاستبداله بحرف جديد.", ephemeral: true });
+    return;
   }
 
   if (interaction.customId.startsWith("harf_play_")) {
@@ -408,13 +411,14 @@ async function handleHarfInteraction(interaction) {
     const handIndex = hand.indexOf(letter);
     
     if (game.isSwappingPhase) {
-      if (handIndex === -1) return interaction.reply({ content: "خطأ، الحرف غير موجود.", ephemeral: true });
+      if (handIndex === -1) return interaction.reply({ content: "خطأ، الحرف غير موجود.", flags: MessageFlags.Ephemeral });
       
       const newLetter = getRandomArabicLetter();
       hand[handIndex] = newLetter; 
       game.swapUsed[userId] = true; 
       
-      await interaction.reply({ content: `✅ تم تبديل الحرف **${letter}** بالحرف **${newLetter}**. استكمل دورك!`, ephemeral: true });
+      // الرد الفوري
+      await interaction.reply({ content: `✅ تم تبديل الحرف **${letter}** بالحرف **${newLetter}**. استكمل دورك!`, flags: MessageFlags.Ephemeral });
       
       const msg = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
       if (msg) await msg.delete().catch(() => {});
@@ -422,8 +426,11 @@ async function handleHarfInteraction(interaction) {
     }
 
     game.selection = letter;
-    const msg = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
 
+    // الرد الفوري قبل تعديل الرسالة
+    await interaction.reply({ content: `✅ اخترت الحرف **${letter}**، الآن اختر أي حرف أساسي لتبديله.`, flags: MessageFlags.Ephemeral });
+
+    const msg = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
     if (msg) {
       const baseRow = new ActionRowBuilder();
       for (let i = game.letters.length - 1; i >= 0; i--) {
@@ -460,15 +467,13 @@ async function handleHarfInteraction(interaction) {
 
       await msg.edit({ components: [baseRow, ...handRows] });
     }
-
-    return interaction.reply({ content: `✅ اخترت الحرف **${letter}**، الآن اختر أي حرف أساسي لتبديله.`, ephemeral: true });
+    return;
   }
 
   if (interaction.customId.startsWith("harf_base_")) {
-    if (!game.selection) return interaction.reply({ content: "اختر حرف من حروفك أولًا.", ephemeral: true });
+    if (!game.selection) return interaction.reply({ content: "اختر حرف من حروفك أولًا.", flags: MessageFlags.Ephemeral });
 
     const baseIndex = parseInt(interaction.customId.split("_")[2]);
-    const oldLetter = game.letters[baseIndex];
     const newLetter = game.selection;
     
     const trialWordArr = [...game.letters];
@@ -477,9 +482,11 @@ async function handleHarfInteraction(interaction) {
 
     const hand = game.playerHands[userId];
     const handIndex = hand.indexOf(newLetter);
-    if (handIndex === -1) return interaction.reply({ content: "حدث خطأ، الحرف غير موجود في يدك.", ephemeral: true });
+    if (handIndex === -1) return interaction.reply({ content: "حدث خطأ، الحرف غير موجود في يدك.", flags: MessageFlags.Ephemeral });
 
     game.selection = null;
+    
+    // الرد الفوري قبل أي معالجة بالـ API
     await interaction.deferUpdate(); 
 
     const checkResult = await verifyWord(word);
@@ -576,11 +583,14 @@ async function handleVote(interaction) {
   const voteData = game.votes;
   const userId = interaction.user.id;
 
-  if (userId === voteData.by) return interaction.reply({ content: "لا يمكنك التصويت على كلمتك.", ephemeral: true });
-  if (voteData.votes[userId]) return interaction.reply({ content: "لقد صوتت مسبقًا.", ephemeral: true });
+  if (userId === voteData.by) return interaction.reply({ content: "لا يمكنك التصويت على كلمتك.", flags: MessageFlags.Ephemeral });
+  if (voteData.votes[userId]) return interaction.reply({ content: "لقد صوتت مسبقًا.", flags: MessageFlags.Ephemeral });
 
   const value = interaction.customId === "harf_vote_yes" ? "yes" : "no";
   voteData.votes[userId] = value;
+
+  // الرد الفوري
+  await interaction.reply({ content: `🗳️ تم تسجيل صوتك: ${value === "yes" ? "موافق" : "رافض"}`, flags: MessageFlags.Ephemeral });
 
   const totalVotes = Object.keys(voteData.votes).length;
   const totalVoters = game.players.filter(p => p.id !== voteData.by).length;
@@ -589,8 +599,6 @@ async function handleVote(interaction) {
     clearTimeout(voteData.timeout);
     return finishVote(interaction.channel);
   }
-
-  return interaction.reply({ content: `🗳️ تم تسجيل صوتك: ${value === "yes" ? "موافق" : "رافض"}`, ephemeral: true });
 }
 
 async function finishVote(channel) {
