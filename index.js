@@ -6445,13 +6445,13 @@ async function handleMultiXOButtons(i) {
 
 const hideGames = {}; // channelId -> game state
 
-// بناء أزرار اللعبة (4x4)
+// بناء أزرار اللعبة (5x5)
 function buildHideGrid(channelId, phase, revealedSpots = []) {
   const rows = [];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 5; i++) {
     const row = new ActionRowBuilder();
-    for (let j = 0; j < 4; j++) {
-      const idx = i * 4 + j;
+    for (let j = 0; j < 5; j++) {
+      const idx = i * 5 + j;
       const btn = new ButtonBuilder()
         .setCustomId(`hide_${phase}_${channelId}_${idx}`)
         .setStyle(ButtonStyle.Secondary);
@@ -6729,10 +6729,10 @@ async function finishHideGame(channelId, lastActionText, lastShooterId) {
 
   // إظهار أماكن كل اللاعبين النهائية في الأزرار
   const finalRows = [];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 5; i++) {
     const row = new ActionRowBuilder();
-    for (let j = 0; j < 4; j++) {
-      const idx = i * 4 + j;
+    for (let j = 0; j < 5; j++) {
+      const idx = i * 5 + j;
       const btn = new ButtonBuilder().setCustomId(`end_${idx}`).setDisabled(true);
       
       const playersHere = Object.entries(game.hidingSpots).filter(([_, spot]) => spot === idx).map(([id]) => id);
