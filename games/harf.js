@@ -94,11 +94,9 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
 }
 
 async function renderHarfBoard(baseLetters, definition, playerHand, playerName, isWin = false) {
-  // --- حساب عدد الصفوف وتحديد طول الصورة الديناميكي ---
-  const maxPerRow = 5; // أقصى عدد حروف في الصف الواحد
+  const maxPerRow = 5; 
   const numRows = (!isWin && playerHand) ? Math.ceil(playerHand.length / maxPerRow) : 0;
   
-  // الطول الأساسي 600. إذا زادت الصفوف عن 1، نزيد الطول 130 بكسل لكل صف إضافي
   const canvasHeight = 600 + (numRows > 1 ? (numRows - 1) * 130 : 0); 
   const canvas = createCanvas(800, canvasHeight);
   const ctx = canvas.getContext("2d");
@@ -121,13 +119,12 @@ async function renderHarfBoard(baseLetters, definition, playerHand, playerName, 
   ctx.fillStyle = "#ffffff";
   wrapText(ctx, definition, 400, 145, 700, 75);
 
-  // --- القسم الأوسط (الحروف الأساسية) ---
   const boxSize = 140; 
   const gap = 25;
   const baseY = 335; 
   const basePositions = [
     { x: 400 + boxSize + gap, y: baseY }, 
-    { x: 400, y: baseY },                 
+    { x: 400, y: baseY },                
     { x: 400 - boxSize - gap, y: baseY }  
   ];
 
@@ -141,26 +138,23 @@ async function renderHarfBoard(baseLetters, definition, playerHand, playerName, 
     ctx.strokeRect(basePositions[i].x - boxSize/2, basePositions[i].y - boxSize/2, boxSize, boxSize);
 
     ctx.fillStyle = isWin ? "#146b38" : "#ded2ff"; 
-    // 👇 التعديل الأول: تم إزالة + 10 من هنا لتتوسط المربع
     ctx.fillText(baseLetters[i] || "", basePositions[i].x, basePositions[i].y);
   }
 
-  // --- القسم السفلي (حروف اللاعب بنظام الصفوف) ---
   if (!isWin && playerHand && playerHand.length > 0) {
     const handBox = 110; 
     const handGap = 20;
-    const rowGap = 20; // المسافة العمودية بين كل صف
+    const rowGap = 20; 
     const startY = 505; 
 
     ctx.font = "bold 70px Cairo"; 
 
-    // رسم الحروف على شكل صفوف
     for (let r = 0; r < numRows; r++) {
       const itemsInRow = Math.min(maxPerRow, playerHand.length - r * maxPerRow);
       const rowWidth = itemsInRow * handBox + (itemsInRow - 1) * handGap;
       
-      let currentX = 400 + rowWidth / 2 - handBox / 2; // توسيط هذا الصف
-      let currentY = startY + r * (handBox + rowGap); // ارتفاع هذا الصف
+      let currentX = 400 + rowWidth / 2 - handBox / 2; 
+      let currentY = startY + r * (handBox + rowGap); 
 
       for (let c = 0; c < itemsInRow; c++) {
         const i = r * maxPerRow + c;
@@ -173,7 +167,6 @@ async function renderHarfBoard(baseLetters, definition, playerHand, playerName, 
         ctx.strokeRect(currentX - handBox/2, currentY - handBox/2, handBox, handBox);
 
         ctx.fillStyle = "#ffffff";
-        // 👇 التعديل الثاني: تم إزالة + 10 من هنا لتتوسط المربع
         ctx.fillText(playerHand[i] || "", currentX, currentY);
         
         currentX -= (handBox + handGap);
@@ -221,7 +214,7 @@ async function handleHarfLobbyInteraction(interaction) {
     if (game.players.find(p => p.id === userId)) return interaction.reply({ content: "أنت بالفعل في اللوبي.", flags: MessageFlags.Ephemeral });
     if (game.players.length >= 4) return interaction.reply({ content: "اللوبي ممتلئ.", flags: MessageFlags.Ephemeral });
 
-    await interaction.deferUpdate(); // الرد الفوري لتفادي الخطأ
+    await interaction.deferUpdate();
 
     game.players.push({ id: userId, username: interaction.user.username });
     if (!game.hostId) game.hostId = userId;
@@ -233,7 +226,7 @@ async function handleHarfLobbyInteraction(interaction) {
     const index = game.players.findIndex(p => p.id === userId);
     if (index === -1) return interaction.reply({ content: "أنت لست في اللوبي.", flags: MessageFlags.Ephemeral });
 
-    await interaction.deferUpdate(); // الرد الفوري لتفادي الخطأ
+    await interaction.deferUpdate();
 
     game.players.splice(index, 1);
     if (game.players.length === 0) {
@@ -249,7 +242,7 @@ async function handleHarfLobbyInteraction(interaction) {
   if (interaction.customId === "harf_start") {
     if (game.players.length < 2) return interaction.reply({ content: "تحتاج على الأقل إلى لاعبين.", flags: MessageFlags.Ephemeral });
     
-    await interaction.deferUpdate(); // الرد الفوري لتفادي الخطأ
+    await interaction.deferUpdate();
     game.state = "playing";
     return startHarfMatch(interaction.channel);
   }
@@ -329,6 +322,18 @@ async function showHarfTurn(channel) {
   game.isSwappingPhase = false; 
 
   const baseRow = new ActionRowBuilder();
+
+  // 1. زر التبديل (تم نقله ليضاف أولاً ليظهر في أقصى اليسار)
+  baseRow.addComponents(
+    new ButtonBuilder()
+      .setCustomId("harf_swap")
+      .setLabel("تبديل")
+      .setStyle(ButtonStyle.Success)
+      .setEmoji("1416507901425614948") 
+      .setDisabled(game.swapUsed[currentId])
+  );
+
+  // 2. أزرار الحروف الأساسية (في المنتصف، بنفس الحلقة التكرارية لتحافظ على القراءة الصحيحة من اليمين لليسار)
   for (let i = game.letters.length - 1; i >= 0; i--) {
     baseRow.addComponents(
       new ButtonBuilder()
@@ -339,14 +344,8 @@ async function showHarfTurn(channel) {
     );
   }
 
+  // 3. زر الانسحاب (تم نقله ليضاف أخيراً ليظهر في أقصى اليمين)
   baseRow.addComponents(
-    new ButtonBuilder()
-      .setCustomId("harf_swap")
-      .setLabel("تبديل")
-      .setStyle(ButtonStyle.Success)
-      .setEmoji("1416507901425614948") 
-      .setDisabled(game.swapUsed[currentId]),
-      
     new ButtonBuilder()
       .setCustomId("harf_quit")
       .setLabel("انسحاب")
@@ -453,6 +452,13 @@ async function handleHarfInteraction(interaction) {
     const msg = await interaction.channel.messages.fetch(game.messageId).catch(() => null);
     if (msg) {
       const baseRow = new ActionRowBuilder();
+      
+      // 1. إضافة زر التبديل معطّل يساراً
+      baseRow.addComponents(
+        new ButtonBuilder().setCustomId("harf_swap").setLabel("تبديل").setStyle(ButtonStyle.Success).setDisabled(true)
+      );
+
+      // 2. الحروف في المنتصف (مُفعلة)
       for (let i = game.letters.length - 1; i >= 0; i--) {
         baseRow.addComponents(
           new ButtonBuilder()
@@ -463,8 +469,8 @@ async function handleHarfInteraction(interaction) {
         );
       }
       
+      // 3. زر الانسحاب يميناً
       baseRow.addComponents(
-        new ButtonBuilder().setCustomId("harf_swap").setLabel("تبديل").setStyle(ButtonStyle.Success).setDisabled(true),
         new ButtonBuilder().setCustomId("harf_quit").setLabel("انسحاب").setStyle(ButtonStyle.Danger)
       );
 
