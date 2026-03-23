@@ -7184,7 +7184,7 @@ async function handleWalletMessage(msg) {
     const secondHalf = formattedTx.slice(5, 10);
 
     // اسم الصورة الجديدة بناءً على طلبك
-    const background = await loadImage(path.join(__dirname, "صوره المحفظه (2).png"));
+    const background = await loadImage(path.join(__dirname, "صوره المحفظه.png"));
     const canvas = createCanvas(background.width, background.height);
     const ctx = canvas.getContext("2d");
 
