@@ -20,11 +20,6 @@ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayInte
 const { createCanvas, loadImage , GlobalFonts } = require('@napi-rs/canvas');
 const express = require("express");
 const app = express();
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const genAIModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-
-const whoAmIGames = new Map(); // حفظ جلسات لعبة مين أنا
 
 app.get("/", (req, res) => {
   res.send("Bot is running");
@@ -133,7 +128,7 @@ assets.explosion = await loadImage(path.join(__dirname, "assets/templates/explos
 assets.mysterybox = await loadImage(path.join(__dirname, "assets/templates/mysterybox.png"));
 assets.closedbox = await loadImage(path.join(__dirname, "assets/templates/closedbox.png"));
 assets.roulletesolo = await loadImage(path.join(__dirname, "assets/templates/roulletesolo.png"));
-
+assets.harf_board = await loadImage(fs.readFileSync(path.join(__dirname, "assets/templates/harf_board.png")));
 }
 preloadAssets();
 
@@ -470,16 +465,6 @@ ui.messagePrefix?.("تحويل", handleTransferMessage);
 ui.messageFilter?.((msg) => msg.content.trim().startsWith("تحويل"), handleTransferMessage);
 ui.messageExact("كشف", handleStatementMessage);
 
-ui.messageFilter(
-  (m) => {
-    try {
-      if (!m?.author || m.author.bot) return false;
-      const game = whoAmIGames.get(m.author.id);
-      return Boolean(game && game.status === 'playing' && game.channelId === m.channelId);
-    } catch { return false; }
-  },
-  handleWhoAmIMessage
-);
 
 // فعّل الراوتر بعد التسجيل
 ui.mount();
@@ -1492,7 +1477,6 @@ const soloGamesMap = {
   blackjack: "startBlackjackSolo",
   buckshot: "startBuckshotSolo",
   soloxo: "startSoloXO", // <== أضف هذا السطر
-  whoami: "startWhoAmI",
 };
 
 // أضف الدالة للقائمة
@@ -1503,9 +1487,7 @@ const soloGameFunctions = {
   startSoloBus,
   startBlackjackSolo,
   startBuckshotSolo,
-  startSoloXO,
-startWhoAmI,
-
+  startSoloXO, // <== أضف هذا السطر
 };
 
 // تحديث أسماء الألعاب
@@ -1516,8 +1498,7 @@ const gameNames = {
   solobus: " تحدي الاوراق ",
   blackjack: " بلاك جاك",
   buckshot: " باكشوت",
-  soloxo: " اكس او",
-  whoami: " مين أنا؟", // <== أضف هذا السطر
+  soloxo: " اكس او", // <== أضف هذا السطر
 };
 const getArabicGameName = (id) => gameNames[id] || id;
 
@@ -1864,247 +1845,6 @@ async function handleSoloGameResult(interaction, gameId, didWin, multiplier = 0)
 }
 
 
-// ==========================================
-// 👤 لعبة مين أنا؟ (Who Am I) - النسخة المطورة
-// ==========================================
-
-// دالة قوية لجلب الصور (تبحث بالإنجليزي أولاً ثم بالعربي لضمان وجود صورة)
-async function fetchWikiImageRobust(nameEn, nameAr) {
-  try {
-    // المحاولة الأولى: ويكيبيديا الإنجليزية
-    let url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(nameEn)}&prop=pageimages&format=json&pithumbsize=300`;
-    let res = await fetch(url);
-    let data = await res.json();
-    let pageId = Object.keys(data.query.pages)[0];
-    
-    if (pageId !== "-1" && data.query.pages[pageId].thumbnail) {
-      return data.query.pages[pageId].thumbnail.source;
-    }
-
-    // المحاولة الثانية: ويكيبيديا العربية
-    url = `https://ar.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(nameAr)}&prop=pageimages&format=json&pithumbsize=300`;
-    res = await fetch(url);
-    data = await res.json();
-    pageId = Object.keys(data.query.pages)[0];
-    
-    if (pageId !== "-1" && data.query.pages[pageId].thumbnail) {
-      return data.query.pages[pageId].thumbnail.source;
-    }
-  } catch (err) {}
-  return null;
-}
-
-// دالة مساعدة لكتابة الاسم لو فشلت كل محاولات جلب الصورة
-function drawFallbackText(ctx, name, x, y) {
-  ctx.fillStyle = '#333';
-  ctx.fillRect(x + 10, y + 10, 280, 280);
-  ctx.fillStyle = 'white';
-  ctx.font = 'bold 30px Cairo';
-  ctx.textAlign = 'center';
-  ctx.fillText(name, x + 150, y + 150);
-}
-
-// دالة الرسم (تقبل مصفوفة الصور ومصفوفة الشخصيات المشطوبة)
-async function renderDynamicWhoAmIBoard(characters, imageUrls, eliminated) {
-  const canvas = createCanvas(900, 900);
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#1a1a1a';
-  ctx.fillRect(0, 0, 900, 900);
-
-  for (let i = 0; i < 9; i++) {
-    const char = characters[i];
-    const x = (i % 3) * 300;
-    const y = Math.floor(i / 3) * 300;
-
-    // إذا الشخصية مشطوبة، نرسم مربع أسود فقط
-    if (eliminated[i]) {
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(x + 10, y + 10, 280, 280);
-      continue; // ننتقل للشخصية اللي بعدها
-    }
-
-    const imageUrl = imageUrls[i];
-
-    if (imageUrl) {
-      try {
-        const res = await fetch(imageUrl);
-        const buffer = Buffer.from(await res.arrayBuffer());
-        const img = await loadImage(buffer);
-        ctx.drawImage(img, x + 10, y + 10, 280, 280);
-      } catch (e) { drawFallbackText(ctx, char.nameAr, x, y); }
-    } else {
-      drawFallbackText(ctx, char.nameAr, x, y);
-    }
-
-    // رسم الرقم
-    ctx.fillStyle = 'rgba(0,0,0,0.8)';
-    ctx.fillRect(x + 10, y + 10, 50, 50);
-    ctx.fillStyle = '#FFD700';
-    ctx.font = 'bold 30px Cairo';
-    ctx.textAlign = 'center';
-    ctx.fillText(i + 1, x + 35, y + 45);
-  }
-  return new AttachmentBuilder(await canvas.encode('png'), { name: 'whoami.png' });
-}
-
-// بدء الجولة
-async function startWhoAmI(interaction, bet) {
-  const userId = interaction.user.id;
-  if (!interaction.replied && !interaction.deferred) await interaction.deferUpdate().catch(() => {});
-  const loadingMsg = await interaction.channel.send("⏳ جاري سحب 9 شخصيات من الـ API وتجهيز اللوحة...");
-
-  try {
-    // طلبنا الاسم باللغتين عشان قوة البحث عن الصور
-    const prompt = `أعطني 9 شخصيات مشهورة جداً (منوّعة: ممثلين، مسلسلات أجنبية وسعودية، أنمي، مارفل، ألعاب). 
-    الرد يجب أن يكون مصفوفة JSON فقط بدون أي نص آخر، بهذا الشكل:
-    [{"nameAr": "الاسم بالعربي", "nameEn": "الاسم بالإنجليزي", "description": "وصف قصير جداً"}]`;
-    
-    const aiResult = await genAIModel.generateContent(prompt);
-    let jsonText = aiResult.response.text().trim().replace(/^```json/, '').replace(/```$/, '').trim();
-    
-    const selectedChars = JSON.parse(jsonText);
-    const targetChar = selectedChars[Math.floor(Math.random() * 9)];
-    
-    // جلب روابط الصور مسبقاً وتخزينها عشان نعيد استخدامها بسرعة
-    const imageUrls = [];
-    for (const char of selectedChars) {
-      const url = await fetchWikiImageRobust(char.nameEn, char.nameAr);
-      imageUrls.push(url);
-    }
-
-    const eliminated = Array(9).fill(false); // مصفوفة لتتبع المربعات المشطوبة
-    const img = await renderDynamicWhoAmIBoard(selectedChars, imageUrls, eliminated);
-    
-    await loadingMsg.delete().catch(() => {});
-    const gameMsg = await interaction.channel.send({
-      content: `👤 **لعبة مين أنا؟**\nاخترت شخصية واحدة من اللي بالصورة وحفظتها في راسي!\nلك **3 أسئلة** تجاوبها بـ (نعم/لا) أو توقع الاسم.\n\n**اكتب سؤالك الأول في الشات:**`,
-      files: [img]
-    });
-
-    whoAmIGames.set(userId, {
-      userId, 
-      bet, 
-      target: targetChar, 
-      selected: selectedChars,
-      imageUrls,
-      eliminated,
-      questionsAsked: 0, 
-      status: 'playing', 
-      channelId: interaction.channel.id,
-      gameMsg // حفظ رسالة اللعبة عشان نحدثها نفسها
-    });
-
-  } catch (error) {
-    console.error("WhoAmI Error:", error);
-    await loadingMsg.edit("❌ حدث خطأ، تم إرجاع رهانك.").catch(() => {});
-    await addBalance(userId, bet); 
-  }
-}
-
-// معالجة أسئلة اللاعب وتحديث الرسالة والصورة
-async function handleWhoAmIMessage(msg) {
-  const game = whoAmIGames.get(msg.author.id);
-  const userText = msg.content.trim();
-  
-  // حذف رسالة اللاعب عشان نحافظ على نظافة الشات والتركيز على رسالة اللعبة
-  setTimeout(() => msg.delete().catch(() => {}), 1000);
-
-  // نستخدم Gemini بضربة واحدة: يفهم إذا هو تخمين أو سؤال، يجاوب، ويحدد الأرقام اللي تنشطب!
-  const aiPrompt = `
-  أنت تدير لعبة "مين أنا".
-  الشخصية المستهدفة هي: "${game.target.nameAr}" (${game.target.description}).
-  اللاعب كتب: "${userText}".
-
-  قائمة الشخصيات الحالية وأرقامها:
-  ${game.selected.map((c, i) => `${i}: ${c.nameAr} (${c.description})`).join('\n')}
-
-  المطلوب إرجاع رد بصيغة JSON فقط يحتوي على:
-  1. "is_guess": true إذا كان اللاعب يحاول تخمين اسم الشخصية مباشرة، false إذا كان يسأل سؤالاً.
-  2. "is_correct": true إذا كان التخمين صحيحاً (فقط إذا is_guess = true).
-  3. "answer": إجابة السؤال بـ "نعم" أو "لا" أو "غير معروف" (إذا is_guess = false).
-  4. "eliminated_indices": مصفوفة أرقام (0-8) للشخصيات التي يجب شطبها لأنها لا تتطابق مع إجابتك. (مثلاً: إذا سأل "هل هو أصلع؟" والشخصية ليست صلعاء، الإجابة "لا"، واشطب كل الصلعان من القائمة).
-
-  صيغة الرد المطلوبة:
-  {
-    "is_guess": false,
-    "is_correct": false,
-    "answer": "لا",
-    "eliminated_indices": [1, 4]
-  }
-  `;
-
-  try {
-    const aiResult = await genAIModel.generateContent(aiPrompt);
-    let jsonText = aiResult.response.text().trim().replace(/^```json/, '').replace(/```$/, '').trim();
-    const result = JSON.parse(jsonText);
-
-    const retryRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("solo_retry_whoami")
-        .setLabel("اعادة المحاولة")
-        .setEmoji("1407461810566860941")
-        .setStyle(ButtonStyle.Secondary)
-    );
-
-    // حالة: اللاعب يتوقع الاسم
-    if (result.is_guess) {
-      if (result.is_correct) {
-        let mult = game.questionsAsked === 0 ? 15 : game.questionsAsked === 1 ? 10 : game.questionsAsked === 2 ? 5 : 2;
-        const winAmount = game.bet * mult;
-        
-        await updateBalanceWithLog(db, msg.author.id, winAmount, "👤 مين أنا - فوز");
-        await addBalance(msg.author.id, game.bet);
-        await updateSoloStats(msg.author.id, "whoami", game.bet, true, winAmount);
-        whoAmIGames.delete(msg.author.id);
-
-        return game.gameMsg.edit({
-          content: `✅ **صح عليك! ذيبان!**\nالشخصية هي **${game.target.nameAr}**.\nجاوبت بعد ${game.questionsAsked} سؤال، ربحت: **${winAmount.toLocaleString()} ريال!** (x${mult})`,
-          components: [retryRow]
-        }).catch(() => {});
-      } else {
-        // توقع خاطئ ينهي اللعبة فوراً (تقدر تغيرها وتخليها تنقص سؤال لو تبي)
-        await db.collection("transactions").insertOne({ userId: msg.author.id, amount: -game.bet, reason: "👤 مين أنا - خسارة", timestamp: new Date() });
-        await updateSoloStats(msg.author.id, "whoami", game.bet, false, 0);
-        whoAmIGames.delete(msg.author.id);
-
-        return game.gameMsg.edit({
-          content: `❌ **توقع خاطئ!**\nالشخصية كانت: **${game.target.nameAr}**. خسر رهانك.`,
-          components: [retryRow]
-        }).catch(() => {});
-      }
-    }
-
-    // حالة: اللاعب يسأل سؤال
-    game.questionsAsked++;
-    
-    // تحديث الشطب
-    if (result.eliminated_indices && Array.isArray(result.eliminated_indices)) {
-      result.eliminated_indices.forEach(idx => {
-        if (idx >= 0 && idx <= 8) game.eliminated[idx] = true;
-      });
-    }
-
-    // إعادة رسم الصورة مع المربعات السوداء الجديدة
-    const newImg = await renderDynamicWhoAmIBoard(game.selected, game.imageUrls, game.eliminated);
-
-    if (game.questionsAsked < 3) {
-      await game.gameMsg.edit({
-        content: `👤 **لعبة مين أنا؟**\nسؤالك: **${userText}**\nالجواب: **${result.answer}**\n\nباقي لك ${3 - game.questionsAsked} أسئلة! (تم شطب الشخصيات المستبعدة باللون الأسود). اسأل سؤالك التالي:`,
-        files: [newImg]
-      }).catch(() => {});
-    } else {
-      await game.gameMsg.edit({
-        content: `👤 **لعبة مين أنا؟**\nسؤالك الأخير: **${userText}**\nالجواب: **${result.answer}**\n\nخلصت أسئلتك! الحين عطني **توقعك النهائي** بالاسم:`,
-        files: [newImg]
-      }).catch(() => {});
-    }
-
-  } catch (error) {
-    console.error("Error processing question:", error);
-    // إعادة محاولة لو الذكاء الاصطناعي خرف وما رجع JSON صح
-    msg.reply("معليش ما فهمت عليك، تقدر تعيد صياغة سؤالك؟").then(m => setTimeout(() => m.delete(), 3000));
-  }
-}
 
 /******************************************
  * 🎰 لعبة روليت (فردية ضد الحظ) — نفس المنطق والمخرجات، مربوطة بالراوتر
@@ -6705,13 +6445,13 @@ async function handleMultiXOButtons(i) {
 
 const hideGames = {}; // channelId -> game state
 
-// بناء أزرار اللعبة (4x4)
+// بناء أزرار اللعبة (5x5)
 function buildHideGrid(channelId, phase, revealedSpots = []) {
   const rows = [];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 5; i++) {
     const row = new ActionRowBuilder();
-    for (let j = 0; j < 4; j++) {
-      const idx = i * 4 + j;
+    for (let j = 0; j < 5; j++) {
+      const idx = i * 5 + j;
       const btn = new ButtonBuilder()
         .setCustomId(`hide_${phase}_${channelId}_${idx}`)
         .setStyle(ButtonStyle.Secondary);
@@ -6989,10 +6729,10 @@ async function finishHideGame(channelId, lastActionText, lastShooterId) {
 
   // إظهار أماكن كل اللاعبين النهائية في الأزرار
   const finalRows = [];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 5; i++) {
     const row = new ActionRowBuilder();
-    for (let j = 0; j < 4; j++) {
-      const idx = i * 4 + j;
+    for (let j = 0; j < 5; j++) {
+      const idx = i * 5 + j;
       const btn = new ButtonBuilder().setCustomId(`end_${idx}`).setDisabled(true);
       
       const playersHere = Object.entries(game.hidingSpots).filter(([_, spot]) => spot === idx).map(([id]) => id);
@@ -7243,8 +6983,7 @@ async function handleGambleCategory(i) {
     { label: " تحدي الاوراق", value: "solobus", emoji: { id: "1407431501792149546", animated: true } },
     { label: " بلاك جاك", value: "blackjack", emoji: { id: "1407431511564619797", animated: true } },
     { label: " باكشوت", value: "buckshot", emoji: { id: "1407431387606290599", animated: true } },
-    { label: " اكس او", value: "soloxo", emoji: { id: "1481411627738988674" } },
-    { label: " مين أنا؟", value: "whoami", emoji: { name: "👤" } }, // <== أضف هذا السطر
+    { label: " اكس او", value: "soloxo", emoji: { id: "1481411627738988674" } } // <== أضف هذا السطر
   ];
 
   const multiGames = [
