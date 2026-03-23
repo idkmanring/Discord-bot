@@ -20,6 +20,13 @@ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayInte
 const { createCanvas, loadImage , GlobalFonts } = require('@napi-rs/canvas');
 const express = require("express");
 const app = express();
+const { GoogleGenAI } = require('@google/genai');
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+// متغيرات حفظ جلسات الـ RPG
+const rpgLobbies = new Map();     // channelId -> بيانات اللوبي
+const activeRpgGames = new Map(); // threadId -> بيانات اللعبة النشطة
+
 
 app.get("/", (req, res) => {
   res.send("Bot is running");
@@ -464,7 +471,22 @@ ui.commandExact('ميني', handleMinigamesCommandMsg);
 ui.messagePrefix?.("تحويل", handleTransferMessage);
 ui.messageFilter?.((msg) => msg.content.trim().startsWith("تحويل"), handleTransferMessage);
 ui.messageExact("كشف", handleStatementMessage);
+// --- راوتر لعبة الـ RPG ---
+ui.messagePrefix("قصة", async (msg, rest) => {
+    return startRpgLobby(msg, rest);
+});
 
+ui.buttonPrefix("rpg_", handleRpgLobbyButtons);
+
+// فلتر لالتقاط الردود داخل ثريد اللعبة فقط
+ui.messageFilter(
+    async (msg) => {
+        if (msg.author.bot) return false;
+        // نتحقق إذا الرسالة داخل ثريد، والثريد هذا مسجل كلعبة نشطة
+        return msg.channel.isThread() && activeRpgGames.has(msg.channel.id);
+    },
+    handleRpgInput
+);
 
 // فعّل الراوتر بعد التسجيل
 ui.mount();
@@ -887,6 +909,259 @@ async function handleStatementMessage(msg) {
 }
 
 
+// ==========================================
+// 🐉 نظام لعبة تقمص الأدوار (RPG) بـ Gemini
+// ==========================================
+
+// أداة لتنظيف رد جيميناي لو حط الكود داخل Markdown
+function cleanJSON(text) {
+    return text.replace(/```json/g, '').replace(/```/g, '').trim();
+}
+
+// 1. بداية اللوبي
+async function startRpgLobby(msg, customPrompt) {
+    const channelId = msg.channel.id;
+    if (rpgLobbies.has(channelId)) return msg.reply("❌ فيه لوبي قصة مفتوح بهذي القناة أصلاً!");
+
+    const lobby = {
+        hostId: msg.author.id,
+        prompt: customPrompt || "مغامرة عشوائية ومفاجئة",
+        players: new Map(), // userId -> username
+        status: "waiting",
+        msgId: null
+    };
+    
+    // الهوست يدخل تلقائي
+    lobby.players.set(msg.author.id, msg.author.username);
+    rpgLobbies.set(channelId, lobby);
+
+    const embed = new EmbedBuilder()
+        .setTitle("🐉 بدأت رحلة RPG جديدة!")
+        .setColor("#FF4500")
+        .setDescription(`**السيناريو:** ${lobby.prompt}\n\n**اللاعبين المكتشفين:**\n<@${msg.author.id}>`);
+
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("rpg_join").setLabel("انضمام").setStyle(ButtonStyle.Success).setEmoji("1408077902859472966"),
+        new ButtonBuilder().setCustomId("rpg_start").setLabel("ابدأ القصة").setStyle(ButtonStyle.Primary).setEmoji("1408080743971950653"),
+        new ButtonBuilder().setCustomId("rpg_cancel").setLabel("إلغاء").setStyle(ButtonStyle.Danger).setEmoji("1416383140338991244")
+    );
+
+    const lobbyMsg = await msg.channel.send({ embeds: [embed], components: [row] });
+    lobby.msgId = lobbyMsg.id;
+}
+
+// 2. أزرار اللوبي
+async function handleRpgLobbyButtons(i) {
+    const channelId = i.channel.id;
+    const lobby = rpgLobbies.get(channelId);
+    if (!lobby || lobby.status !== "waiting") return;
+
+    if (i.customId === "rpg_join") {
+        if (lobby.players.has(i.user.id)) return i.reply({ content: "❌ أنت موجود بالرحلة أصلاً!", ephemeral: true });
+        
+        lobby.players.set(i.user.id, i.user.username);
+        const playerMentions = Array.from(lobby.players.keys()).map(id => `<@${id}>`).join("\n");
+        const embed = EmbedBuilder.from(i.message.embeds[0]).setDescription(`**السيناريو:** ${lobby.prompt}\n\n**اللاعبين (${lobby.players.size}):**\n${playerMentions}`);
+        
+        await i.update({ embeds: [embed] });
+        return;
+    }
+
+    if (i.customId === "rpg_cancel") {
+        if (i.user.id !== lobby.hostId) return i.reply({ content: "❌ الهوست بس يقدر يلغي.", ephemeral: true });
+        rpgLobbies.delete(channelId);
+        return i.update({ content: "❌ تم إلغاء الرحلة.", embeds: [], components: [] });
+    }
+
+    if (i.customId === "rpg_start") {
+        if (i.user.id !== lobby.hostId) return i.reply({ content: "❌ الهوست بس يقدر يبدأ اللعب.", ephemeral: true });
+        
+        await i.update({ content: "⏳ جاري تجهيز الثريد وبناء العالم... (ياخذ ثواني)", embeds: [], components: [] });
+        lobby.status = "starting";
+        await initiateRpgGame(i.channel, lobby);
+    }
+}
+
+// 3. بناء الثريد وبدء التخاطب مع جيميناي
+async function initiateRpgGame(channel, lobby) {
+    const threadName = `رحلة-${lobby.players.values().next().value}`.substring(0, 90);
+    const thread = await channel.threads.create({
+        name: threadName,
+        autoArchiveDuration: 60,
+        type: 11 // Public Thread
+    });
+
+    const playersList = Array.from(lobby.players.entries()).map(([id, name]) => ({ id, name }));
+    const pMentions = playersList.map(p => `<@${p.id}>`).join(" ");
+    
+    await thread.send(`🎮 حياكم الله في عالمكم الجديد ${pMentions}\nالقصة بتبدأ الحين، ركزوا!`);
+
+    const systemInstruction = `
+أنت Dungeon Master للعبة RPG نصية ممتعة ومشوقة.
+فكرة القصة الأساسية: ${lobby.prompt}
+اللاعبون: ${JSON.stringify(playersList)}
+
+في كل رد لك، يجب أن تعيد النتيجة بصيغة JSON صحيحة وحصرياً بهذا التنسيق بدون أي كلام إضافي:
+{
+  "scenario": "وصف المشهد وما يحدث الآن بشكل مشوق",
+  "options": ["خيار 1", "خيار 2", "خيار 3", "خيار 4"],
+  "playersState": [
+    {"id": "id_اللاعب_هنا", "role": "وظيفته باللعبة", "inventory": "الأدوات التي يملكها حالياً"}
+  ]
+}
+يجب أن يكون هناك 4 خيارات دائماً لإنقاذ الموقف أو التقدم بالقصة.
+وزع شخصيات وأدوات مبدئية تناسب القصة على اللاعبين في أول جولة.
+`;
+
+    const chatSession = ai.chats.create({
+        model: 'gemini-2.5-flash',
+        config: { systemInstruction: systemInstruction }
+    });
+
+    const game = {
+        threadId: thread.id,
+        chat: chatSession,
+        players: playersList.map(p => ({ ...p, action: null, afkCount: 0 })),
+        round: 1,
+        options: [],
+        timer: null,
+        mainMsg: null
+    };
+    
+    activeRpgGames.set(thread.id, game);
+    rpgLobbies.delete(channel.id);
+
+    await processRpgRound(thread.id, "ابدأ القصة، وزع الأدوار على اللاعبين بناءً على عددهم، وضعهم في المأزق الأول.");
+}
+
+// 4. معالجة الجولة وعرضها
+async function processRpgRound(threadId, userInput) {
+    const game = activeRpgGames.get(threadId);
+    if (!game) return;
+    const thread = await client.channels.fetch(threadId);
+    
+    try {
+        const response = await game.chat.sendMessage({ message: userInput });
+        const jsonText = cleanJSON(response.text);
+        const data = JSON.parse(jsonText);
+
+        game.options = data.options;
+        game.players.forEach(p => p.action = null); // تصفير الأفعال للجولة الجديدة
+
+        const embed = new EmbedBuilder()
+            .setTitle(`📜 الجولة ${game.round}`)
+            .setColor("#8A2BE2")
+            .setDescription(`${data.scenario}\n\n**الخيارات المتاحة (أرسل الرقم أو اكتب ردك الخاص):**\n1️⃣ ${data.options[0]}\n2️⃣ ${data.options[1]}\n3️⃣ ${data.options[2]}\n4️⃣ ${data.options[3]}`);
+
+        data.playersState.forEach(p => {
+            const playerObj = game.players.find(x => x.id === p.id);
+            if(playerObj) {
+                 embed.addFields({ name: `${playerObj.name} (${p.role})`, value: `🎒 الأدوات: ${p.inventory}\n⏳ الحالة: ينتظر القرار`, inline: true });
+            }
+        });
+
+        game.mainMsg = await thread.send({ embeds: [embed] });
+        game.round++;
+
+        // مؤقت AFK (دقيقتين = 120000 ملي ثانية)
+        if (game.timer) clearTimeout(game.timer);
+        game.timer = setTimeout(() => handleRpgAfk(threadId), 120000);
+
+    } catch (e) {
+        console.error("RPG Parse Error:", e);
+        thread.send("❌ الذكاء الاصطناعي واجه مشكلة في صياغة القصة.. جاري المحاولة مرة أخرى.");
+        setTimeout(() => processRpgRound(threadId, "حدث خطأ، يرجى إعادة إرسال المشهد الأخير بصيغة JSON صحيحة."), 3000);
+    }
+}
+
+// 5. استقبال مدخلات اللاعبين داخل الثريد
+async function handleRpgInput(msg) {
+    const game = activeRpgGames.get(msg.channel.id);
+    if (!game) return;
+
+    const player = game.players.find(p => p.id === msg.author.id);
+    if (!player) return; // شخص يتابع بس، مو باللعبة
+
+    if (player.action !== null) {
+        return msg.reply("⏳ سجلت قرارك، انتظر الباقين!").then(m => setTimeout(()=>m.delete().catch(()=>{}), 3000));
+    }
+
+    let actionText = msg.content.trim();
+    if (["1", "2", "3", "4"].includes(actionText)) {
+        actionText = game.options[parseInt(actionText) - 1]; // تحويل الرقم للرد الجاهز
+    }
+
+    player.action = actionText;
+    player.afkCount = 0; // تصفير عداد المخالفات
+    await msg.react('✅').catch(()=>{});
+
+    // تحديث علامة الصح في الـ Embed
+    if (game.mainMsg) {
+        const embed = EmbedBuilder.from(game.mainMsg.embeds[0]);
+        const fieldIndex = embed.data.fields.findIndex(f => f.name.includes(player.name));
+        if (fieldIndex !== -1) {
+            embed.data.fields[fieldIndex].value = embed.data.fields[fieldIndex].value.replace("⏳ الحالة: ينتظر القرار", "✅ الحالة: جاهز");
+            game.mainMsg.edit({ embeds: [embed] }).catch(()=>{});
+        }
+    }
+
+    // إذا الكل جاوب، كمل القصة
+    if (game.players.every(p => p.action !== null)) {
+        if (game.timer) clearTimeout(game.timer);
+        executeRpgTurn(game.threadId);
+    }
+}
+
+// 6. جمع قرارات اللاعبين وإرسالها
+async function executeRpgTurn(threadId) {
+    const game = activeRpgGames.get(threadId);
+    if(!game) return;
+    const thread = await client.channels.fetch(threadId);
+    
+    await thread.send("🔄 جاري تحليل قراراتكم ونسج الأحداث...").then(m => setTimeout(()=>m.delete().catch(()=>{}), 4000));
+
+    let compiledActions = "انتهت الجولة، هذه قرارات اللاعبين:\n";
+    game.players.forEach(p => {
+        compiledActions += `- اللاعب (ID: ${p.id}, Name: ${p.name}) قرر: ${p.action}\n`;
+    });
+    compiledActions += "\nأكمل القصة بناءً على قراراتهم وأعطنا نتائج أفعالهم والمأزق الجديد. تذكر الرد بـ JSON فقط.";
+
+    await processRpgRound(threadId, compiledActions);
+}
+
+// 7. معالجة المتأخرين والطرد
+async function handleRpgAfk(threadId) {
+    const game = activeRpgGames.get(threadId);
+    if (!game) return;
+    const thread = await client.channels.fetch(threadId);
+    
+    let needsExecution = false;
+
+    game.players.forEach(p => {
+        if (p.action === null) {
+            p.afkCount++;
+            p.action = game.options[0]; // يختار أول خيار إجباري
+            needsExecution = true;
+            
+            thread.send(`⏰ <@${p.id}> تأخرت دقيقتين! البوت اختار لك الخيار الأول تلقائياً. (مخالفة ${p.afkCount}/2)`);
+            
+            if (p.afkCount >= 2) {
+                thread.send(`🚪 <@${p.id}> تم طردك من القصة بسبب الخمول.`);
+                game.players = game.players.filter(x => x.id !== p.id); // طرد
+            }
+        }
+    });
+
+    if (game.players.length === 0) {
+        thread.send("💀 الجميع انطرد من اللعبة! انتهت القصة.");
+        activeRpgGames.delete(threadId);
+        return;
+    }
+
+    if (needsExecution && game.players.every(p => p.action !== null)) {
+        executeRpgTurn(threadId);
+    }
+}
 
 /******************************************
  *لعبة ورردل Wordle عربية   *
