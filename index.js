@@ -7088,8 +7088,8 @@ function drawCircularImage(ctx, img, x, y, radius) {
   ctx.restore();
 }
 
-// تعديل اللون الافتراضي ليكون #0f433f
-function drawText(ctx, text, x, y, font = "100px", color = "#0f433f", align = "center") {
+// تعديل اللون الافتراضي ليكون #3eb8a1
+function drawText(ctx, text, x, y, font = "100px", color = "#3eb8a1", align = "center") {
   ctx.font = font;
   ctx.fillStyle = color;
   ctx.textAlign = align;
@@ -7103,11 +7103,11 @@ const TRANSFER_REASONS = [
   "هدية", "شراء غرض", "سلفة مستردة"
 ];
 
-// دالة الرسم الذكي داخل المربع
-function drawSmartBoxText(ctx, linesArray, box, color = "#0f433f", fontName = "Cairo") {
+// دالة الرسم الذكي داخل المربع (تم تحسين الخطوط والمسافات)
+function drawSmartBoxText(ctx, linesArray, box, color = "#3eb8a1", fontName = "Cairo") {
   let fontSize = box.h; // نبدأ بأكبر خط ممكن يوسع الارتفاع
   let fits = false;
-  const lineHeightMultiplier = 1.1; // المسافة بين السطور
+  const lineHeightMultiplier = 1.6; // مسافة عمودية أبعد بين السطور
 
   // تصغير الخط لحد ما يركب العرض والطول
   while (fontSize > 10 && !fits) {
@@ -7120,12 +7120,15 @@ function drawSmartBoxText(ctx, linesArray, box, color = "#0f433f", fontName = "C
       if (m.width > maxWidth) maxWidth = m.width;
     }
 
-    const totalHeight = fontSize * linesArray.length * lineHeightMultiplier;
+    // حساب الطول الإجمالي: لو سطر واحد يأخذ حجم الخط، لو أكثر يأخذ مسافات
+    const totalHeight = linesArray.length === 1 
+      ? fontSize 
+      : fontSize * linesArray.length * lineHeightMultiplier;
 
     if (maxWidth <= box.w * 0.95 && totalHeight <= box.h * 0.95) {
       fits = true; // الخط مناسب
     } else {
-      fontSize -= 2; // نصغر الخط حبتين ونحاول ثاني
+      fontSize -= 1.5; // نصغر الخط بشكل خفيف ونحاول ثاني
     }
   }
 
@@ -7134,9 +7137,11 @@ function drawSmartBoxText(ctx, linesArray, box, color = "#0f433f", fontName = "C
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
-  // حساب نقطة البداية عشان يكون الكلام بمنتصف المربع عمودياً
-  const totalHeight = fontSize * linesArray.length * lineHeightMultiplier;
-  let startY = box.y + (box.h / 2) - (totalHeight / 2) + (fontSize / 2);
+  const totalHeightCalc = linesArray.length === 1 
+    ? fontSize 
+    : fontSize * linesArray.length * lineHeightMultiplier;
+    
+  let startY = box.y + (box.h / 2) - (totalHeightCalc / 2) + (fontSize / 2);
 
   // طباعة السطور
   for (let i = 0; i < linesArray.length; i++) {
@@ -7171,10 +7176,14 @@ async function handleWalletMessage(msg) {
     // تنسيق العمليات
     const formattedTx = userTransactions.map(tx => {
       const amt = tx.amount > 0 ? `+${tx.amount.toLocaleString("en-US")}` : `${tx.amount.toLocaleString("en-US")}`;
-      // تنظيف السبب من المنشن (تبديل الآيدي بكلمة "مستخدم" عشان تطلع الصورة مرتبة)
+      
       let reason = tx.reason || "عملية غير معروفة";
+      // تنظيف السبب من المنشن (تبديل الآيدي بكلمة "مستخدم")
       reason = reason.replace(/<@!?\d+>/g, "مستخدم"); 
-      return `${amt} ريال | ${reason}`;
+      // حذف الإيموجيات وأي رموز غريبة (نخلي بس حروف عربية/انجليزية، ارقام، مسافات)
+      reason = reason.replace(/[^\u0600-\u06FFa-zA-Z0-9\s\-]/g, '').trim(); 
+      
+      return `${amt} | ${reason}`;
     });
 
     if (formattedTx.length === 0) formattedTx.push("لا توجد عمليات سابقة");
@@ -7183,23 +7192,22 @@ async function handleWalletMessage(msg) {
     const firstHalf = formattedTx.slice(0, 5);
     const secondHalf = formattedTx.slice(5, 10);
 
-    // اسم الصورة الجديدة بناءً على طلبك
     const background = await loadImage(path.join(__dirname, "صوره المحفظه.png"));
     const canvas = createCanvas(background.width, background.height);
     const ctx = canvas.getContext("2d");
 
     ctx.drawImage(background, 0, 0);
 
-    // المربعات الذكية بناءً على الإحداثيات اللي عطيتني إياها
+    // المربعات الذكية
     const boxes = {
-      date:    { x: 4, y: 15, w: 336, h: 45 },    // التاريخ
-      account: { x: 2, y: 117, w: 293, h: 40 },   // الحساب
-      balance: { x: 6, y: 418, w: 964, h: 78 },   // الرصيد
-      tx1_5:   { x: 558, y: 643, w: 578, h: 285 },// عمليات 1 إلى 5
-      tx6_10:  { x: 5, y: 644, w: 521, h: 283 }   // عمليات 6 إلى 10
+      date:    { x: 4, y: 15, w: 336, h: 45 },    
+      account: { x: 2, y: 117, w: 293, h: 40 },   
+      balance: { x: 6, y: 418, w: 964, h: 78 },   
+      tx1_5:   { x: 558, y: 643, w: 578, h: 285 },
+      tx6_10:  { x: 5, y: 644, w: 521, h: 283 }   
     };
 
-    const textColor = "#0f433f";
+    const textColor = "#3eb8a1"; // اللون الجديد
 
     // 1. التاريخ والوقت
     const currentDate = new Date();
@@ -7209,8 +7217,8 @@ async function handleWalletMessage(msg) {
     // 2. رقم الحساب (الآيدي)
     drawSmartBoxText(ctx, [userId], boxes.account, textColor);
 
-    // 3. الرصيد
-    drawSmartBoxText(ctx, [`${balance.toLocaleString("en-US")} ريال`], boxes.balance, textColor);
+    // 3. الرصيد (بدون كلمة ريال)
+    drawSmartBoxText(ctx, [`${balance.toLocaleString("en-US")}`], boxes.balance, textColor);
 
     // 4. العمليات (1 إلى 5)
     if (firstHalf.length > 0) {
@@ -7221,7 +7229,6 @@ async function handleWalletMessage(msg) {
     if (secondHalf.length > 0) {
       drawSmartBoxText(ctx, secondHalf, boxes.tx6_10, textColor);
     } else if (userTransactions.length > 0 && secondHalf.length === 0) {
-      // مربع فارغ أو نضع نص خفيف إذا مافي عمليات كافية
       drawSmartBoxText(ctx, ["-"], boxes.tx6_10, textColor);
     }
 
@@ -7230,7 +7237,7 @@ async function handleWalletMessage(msg) {
     return msg.reply({ files: [attachment] });
   } catch (error) {
     console.error("خطأ في أمر الرصيد:", error);
-    return msg.reply("❌ حدث خطأ أثناء تجهيز صورة المحفظة. تأكد من وجود ملف 'صوره المحفظه (2).png'.");
+    return msg.reply("❌ حدث خطأ أثناء تجهيز صورة المحفظة. تأكد من وجود ملف 'صوره المحفظه.png'.");
   }
 }
 
@@ -7407,24 +7414,29 @@ async function handleTransferKeys(i) {
         date:     { x: 732, y: 290, w: 390, h: 44 }
       };
 
-      const amountText = [`${amount.toLocaleString("en-US")} ريال`];
-      drawSmartBoxText(ctx, amountText, boxes.amount, "#0f433f");
+      const textColor = "#3eb8a1";
+
+      // بدون كلمة ريال
+      const amountText = [`${amount.toLocaleString("en-US")}`];
+      drawSmartBoxText(ctx, amountText, boxes.amount, textColor);
 
       const senderName = i.user.displayName || i.user.username;
-      const senderText = [`${senderName}`, `${userId}`];
-      drawSmartBoxText(ctx, senderText, boxes.sender, "#0f433f");
+      // تنظيف اسم المرسل من الايموجيات قبل الطباعة
+      const cleanSenderName = senderName.replace(/[^\u0600-\u06FFa-zA-Z0-9\s]/g, '').trim();
+      const senderText = [`${cleanSenderName}`, `${userId}`];
+      drawSmartBoxText(ctx, senderText, boxes.sender, textColor);
 
       const staticUser = STATIC_USERS.find(u => u.id === st.targetId);
-      const receiverName = staticUser ? staticUser.name : "مستخدم";
+      let receiverName = staticUser ? staticUser.name : "مستخدم";
       const receiverText = [`${receiverName}`, `${st.targetId}`];
-      drawSmartBoxText(ctx, receiverText, boxes.receiver, "#0f433f");
+      drawSmartBoxText(ctx, receiverText, boxes.receiver, textColor);
 
       const randomReason = TRANSFER_REASONS[Math.floor(Math.random() * TRANSFER_REASONS.length)];
-      drawSmartBoxText(ctx, [randomReason], boxes.reason, "#0f433f");
+      drawSmartBoxText(ctx, [randomReason], boxes.reason, textColor);
 
       const currentDate = new Date();
       const dateStr = currentDate.toLocaleDateString("en-GB") + " " + currentDate.toLocaleTimeString("en-US", { hour12: false });
-      drawSmartBoxText(ctx, [dateStr], boxes.date, "#0f433f");
+      drawSmartBoxText(ctx, [dateStr], boxes.date, textColor);
 
       const buffer = await canvas.encode("png");
       const attachment = new AttachmentBuilder(buffer, { name: "transfer_receipt.png" });
