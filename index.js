@@ -1864,24 +1864,37 @@ async function handleSoloGameResult(interaction, gameId, didWin, multiplier = 0)
 }
 
 
-
-
 // ==========================================
-// 👤 لعبة مين أنا؟ (Who Am I)
+// 👤 لعبة مين أنا؟ (Who Am I) - النسخة المطورة
 // ==========================================
 
-async function fetchWikiImage(characterName) {
+// دالة قوية لجلب الصور (تبحث بالإنجليزي أولاً ثم بالعربي لضمان وجود صورة)
+async function fetchWikiImageRobust(nameEn, nameAr) {
   try {
-    const url = `https://ar.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(characterName)}&prop=pageimages&format=json&pithumbsize=300`;
-    const res = await fetch(url);
-    const data = await res.json();
-    const pages = data.query.pages;
-    const pageId = Object.keys(pages)[0];
-    if (pageId !== "-1" && pages[pageId].thumbnail) return pages[pageId].thumbnail.source;
+    // المحاولة الأولى: ويكيبيديا الإنجليزية
+    let url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(nameEn)}&prop=pageimages&format=json&pithumbsize=300`;
+    let res = await fetch(url);
+    let data = await res.json();
+    let pageId = Object.keys(data.query.pages)[0];
+    
+    if (pageId !== "-1" && data.query.pages[pageId].thumbnail) {
+      return data.query.pages[pageId].thumbnail.source;
+    }
+
+    // المحاولة الثانية: ويكيبيديا العربية
+    url = `https://ar.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(nameAr)}&prop=pageimages&format=json&pithumbsize=300`;
+    res = await fetch(url);
+    data = await res.json();
+    pageId = Object.keys(data.query.pages)[0];
+    
+    if (pageId !== "-1" && data.query.pages[pageId].thumbnail) {
+      return data.query.pages[pageId].thumbnail.source;
+    }
   } catch (err) {}
   return null;
 }
 
+// دالة مساعدة لكتابة الاسم لو فشلت كل محاولات جلب الصورة
 function drawFallbackText(ctx, name, x, y) {
   ctx.fillStyle = '#333';
   ctx.fillRect(x + 10, y + 10, 280, 280);
@@ -1891,7 +1904,8 @@ function drawFallbackText(ctx, name, x, y) {
   ctx.fillText(name, x + 150, y + 150);
 }
 
-async function renderDynamicWhoAmIBoard(characters) {
+// دالة الرسم (تقبل مصفوفة الصور ومصفوفة الشخصيات المشطوبة)
+async function renderDynamicWhoAmIBoard(characters, imageUrls, eliminated) {
   const canvas = createCanvas(900, 900);
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#1a1a1a';
@@ -1901,7 +1915,15 @@ async function renderDynamicWhoAmIBoard(characters) {
     const char = characters[i];
     const x = (i % 3) * 300;
     const y = Math.floor(i / 3) * 300;
-    const imageUrl = await fetchWikiImage(char.name);
+
+    // إذا الشخصية مشطوبة، نرسم مربع أسود فقط
+    if (eliminated[i]) {
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(x + 10, y + 10, 280, 280);
+      continue; // ننتقل للشخصية اللي بعدها
+    }
+
+    const imageUrl = imageUrls[i];
 
     if (imageUrl) {
       try {
@@ -1909,11 +1931,12 @@ async function renderDynamicWhoAmIBoard(characters) {
         const buffer = Buffer.from(await res.arrayBuffer());
         const img = await loadImage(buffer);
         ctx.drawImage(img, x + 10, y + 10, 280, 280);
-      } catch (e) { drawFallbackText(ctx, char.name, x, y); }
+      } catch (e) { drawFallbackText(ctx, char.nameAr, x, y); }
     } else {
-      drawFallbackText(ctx, char.name, x, y);
+      drawFallbackText(ctx, char.nameAr, x, y);
     }
 
+    // رسم الرقم
     ctx.fillStyle = 'rgba(0,0,0,0.8)';
     ctx.fillRect(x + 10, y + 10, 50, 50);
     ctx.fillStyle = '#FFD700';
@@ -1924,15 +1947,17 @@ async function renderDynamicWhoAmIBoard(characters) {
   return new AttachmentBuilder(await canvas.encode('png'), { name: 'whoami.png' });
 }
 
+// بدء الجولة
 async function startWhoAmI(interaction, bet) {
   const userId = interaction.user.id;
   if (!interaction.replied && !interaction.deferred) await interaction.deferUpdate().catch(() => {});
-  const loadingMsg = await interaction.channel.send("⏳ جاري توليد شخصيات عشوائية وصورها، ثواني بس...");
+  const loadingMsg = await interaction.channel.send("⏳ جاري سحب 9 شخصيات من الـ API وتجهيز اللوحة...");
 
   try {
-    const prompt = `أعطني 9 شخصيات مشهورة جداً (منوّعة: ممثلين سعوديين، مسلسلات أجنبية، أنمي، مارفل). 
+    // طلبنا الاسم باللغتين عشان قوة البحث عن الصور
+    const prompt = `أعطني 9 شخصيات مشهورة جداً (منوّعة: ممثلين، مسلسلات أجنبية وسعودية، أنمي، مارفل، ألعاب). 
     الرد يجب أن يكون مصفوفة JSON فقط بدون أي نص آخر، بهذا الشكل:
-    [{"name": "الاسم", "description": "وصف قصير"}]`;
+    [{"nameAr": "الاسم بالعربي", "nameEn": "الاسم بالإنجليزي", "description": "وصف قصير جداً"}]`;
     
     const aiResult = await genAIModel.generateContent(prompt);
     let jsonText = aiResult.response.text().trim().replace(/^```json/, '').replace(/```$/, '').trim();
@@ -1940,17 +1965,33 @@ async function startWhoAmI(interaction, bet) {
     const selectedChars = JSON.parse(jsonText);
     const targetChar = selectedChars[Math.floor(Math.random() * 9)];
     
-    const img = await renderDynamicWhoAmIBoard(selectedChars);
-    
-    whoAmIGames.set(userId, {
-      userId, bet, target: targetChar, selected: selectedChars,
-      questionsAsked: 0, status: 'playing', channelId: interaction.channel.id
-    });
+    // جلب روابط الصور مسبقاً وتخزينها عشان نعيد استخدامها بسرعة
+    const imageUrls = [];
+    for (const char of selectedChars) {
+      const url = await fetchWikiImageRobust(char.nameEn, char.nameAr);
+      imageUrls.push(url);
+    }
+
+    const eliminated = Array(9).fill(false); // مصفوفة لتتبع المربعات المشطوبة
+    const img = await renderDynamicWhoAmIBoard(selectedChars, imageUrls, eliminated);
     
     await loadingMsg.delete().catch(() => {});
-    await interaction.channel.send({
-      content: `👤 **لعبة مين أنا؟**\nاخترت شخصية واحدة من اللي بالصورة!\nلك **3 أسئلة** تجاوبها بـ (نعم/لا) عشان تعرفها.\n\n**اكتب سؤالك أو توقعك الآن في الشات:**`,
+    const gameMsg = await interaction.channel.send({
+      content: `👤 **لعبة مين أنا؟**\nاخترت شخصية واحدة من اللي بالصورة وحفظتها في راسي!\nلك **3 أسئلة** تجاوبها بـ (نعم/لا) أو توقع الاسم.\n\n**اكتب سؤالك الأول في الشات:**`,
       files: [img]
+    });
+
+    whoAmIGames.set(userId, {
+      userId, 
+      bet, 
+      target: targetChar, 
+      selected: selectedChars,
+      imageUrls,
+      eliminated,
+      questionsAsked: 0, 
+      status: 'playing', 
+      channelId: interaction.channel.id,
+      gameMsg // حفظ رسالة اللعبة عشان نحدثها نفسها
     });
 
   } catch (error) {
@@ -1960,45 +2001,108 @@ async function startWhoAmI(interaction, bet) {
   }
 }
 
+// معالجة أسئلة اللاعب وتحديث الرسالة والصورة
 async function handleWhoAmIMessage(msg) {
   const game = whoAmIGames.get(msg.author.id);
   const userText = msg.content.trim();
   
-  // شيك هل اللاعب يقصد توقع أم سؤال
-  const checkPrompt = `الشخصية المستهدفة: "${game.target.name}" (${game.target.description}).
+  // حذف رسالة اللاعب عشان نحافظ على نظافة الشات والتركيز على رسالة اللعبة
+  setTimeout(() => msg.delete().catch(() => {}), 1000);
+
+  // نستخدم Gemini بضربة واحدة: يفهم إذا هو تخمين أو سؤال، يجاوب، ويحدد الأرقام اللي تنشطب!
+  const aiPrompt = `
+  أنت تدير لعبة "مين أنا".
+  الشخصية المستهدفة هي: "${game.target.nameAr}" (${game.target.description}).
   اللاعب كتب: "${userText}".
-  هل هذا النص يعتبر إجابة صحيحة وتوقع لاسم الشخصية؟ (تجاوز الأخطاء الإملائية). أجب بـ "نعم" أو "لا" فقط.`;
 
-  const result = await genAIModel.generateContent(checkPrompt);
-  const isCorrect = result.response.text().includes("نعم");
+  قائمة الشخصيات الحالية وأرقامها:
+  ${game.selected.map((c, i) => `${i}: ${c.nameAr} (${c.description})`).join('\n')}
 
-  if (isCorrect) {
-    let mult = game.questionsAsked === 0 ? 15 : game.questionsAsked === 1 ? 10 : game.questionsAsked === 2 ? 5 : 2;
-    const winAmount = game.bet * mult;
-    
-    await updateBalanceWithLog(db, msg.author.id, winAmount, "👤 مين أنا - فوز");
-    await addBalance(msg.author.id, game.bet); // استرجاع الرهان
-    await updateSoloStats(msg.author.id, "whoami", game.bet, true, winAmount);
-    
-    whoAmIGames.delete(msg.author.id);
-    return msg.reply(`✅ **صح عليك!** الشخصية هي **${game.target.name}**.\nجاوبت بعد ${game.questionsAsked} سؤال، ربحت: **${winAmount.toLocaleString()} ريال!** (x${mult})`);
+  المطلوب إرجاع رد بصيغة JSON فقط يحتوي على:
+  1. "is_guess": true إذا كان اللاعب يحاول تخمين اسم الشخصية مباشرة، false إذا كان يسأل سؤالاً.
+  2. "is_correct": true إذا كان التخمين صحيحاً (فقط إذا is_guess = true).
+  3. "answer": إجابة السؤال بـ "نعم" أو "لا" أو "غير معروف" (إذا is_guess = false).
+  4. "eliminated_indices": مصفوفة أرقام (0-8) للشخصيات التي يجب شطبها لأنها لا تتطابق مع إجابتك. (مثلاً: إذا سأل "هل هو أصلع؟" والشخصية ليست صلعاء، الإجابة "لا"، واشطب كل الصلعان من القائمة).
+
+  صيغة الرد المطلوبة:
+  {
+    "is_guess": false,
+    "is_correct": false,
+    "answer": "لا",
+    "eliminated_indices": [1, 4]
   }
+  `;
 
-  if (game.questionsAsked < 3) {
+  try {
+    const aiResult = await genAIModel.generateContent(aiPrompt);
+    let jsonText = aiResult.response.text().trim().replace(/^```json/, '').replace(/```$/, '').trim();
+    const result = JSON.parse(jsonText);
+
+    const retryRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("solo_retry_whoami")
+        .setLabel("اعادة المحاولة")
+        .setEmoji("1407461810566860941")
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    // حالة: اللاعب يتوقع الاسم
+    if (result.is_guess) {
+      if (result.is_correct) {
+        let mult = game.questionsAsked === 0 ? 15 : game.questionsAsked === 1 ? 10 : game.questionsAsked === 2 ? 5 : 2;
+        const winAmount = game.bet * mult;
+        
+        await updateBalanceWithLog(db, msg.author.id, winAmount, "👤 مين أنا - فوز");
+        await addBalance(msg.author.id, game.bet);
+        await updateSoloStats(msg.author.id, "whoami", game.bet, true, winAmount);
+        whoAmIGames.delete(msg.author.id);
+
+        return game.gameMsg.edit({
+          content: `✅ **صح عليك! ذيبان!**\nالشخصية هي **${game.target.nameAr}**.\nجاوبت بعد ${game.questionsAsked} سؤال، ربحت: **${winAmount.toLocaleString()} ريال!** (x${mult})`,
+          components: [retryRow]
+        }).catch(() => {});
+      } else {
+        // توقع خاطئ ينهي اللعبة فوراً (تقدر تغيرها وتخليها تنقص سؤال لو تبي)
+        await db.collection("transactions").insertOne({ userId: msg.author.id, amount: -game.bet, reason: "👤 مين أنا - خسارة", timestamp: new Date() });
+        await updateSoloStats(msg.author.id, "whoami", game.bet, false, 0);
+        whoAmIGames.delete(msg.author.id);
+
+        return game.gameMsg.edit({
+          content: `❌ **توقع خاطئ!**\nالشخصية كانت: **${game.target.nameAr}**. خسر رهانك.`,
+          components: [retryRow]
+        }).catch(() => {});
+      }
+    }
+
+    // حالة: اللاعب يسأل سؤال
     game.questionsAsked++;
-    const aiPrompt = `الشخصية هي: "${game.target.name}" (${game.target.description}).
-    اللاعب يسأل: "${userText}".
-    أجب على سؤاله بـ "نعم" أو "لا" أو "غير معروف" فقط.`;
+    
+    // تحديث الشطب
+    if (result.eliminated_indices && Array.isArray(result.eliminated_indices)) {
+      result.eliminated_indices.forEach(idx => {
+        if (idx >= 0 && idx <= 8) game.eliminated[idx] = true;
+      });
+    }
 
-    const aiRes = await genAIModel.generateContent(aiPrompt);
-    const answer = aiRes.response.text().trim();
+    // إعادة رسم الصورة مع المربعات السوداء الجديدة
+    const newImg = await renderDynamicWhoAmIBoard(game.selected, game.imageUrls, game.eliminated);
 
-    return msg.reply(`❓ السؤال ${game.questionsAsked}/3: **${userText}**\nالجواب: **${answer}**\n${game.questionsAsked === 3 ? "هذا سؤالك الأخير! هات توقعك النهائي." : "اطرح سؤالك التالي أو توقع."}`);
-  } else {
-    await db.collection("transactions").insertOne({ userId: msg.author.id, amount: -game.bet, reason: "👤 مين أنا - خسارة", timestamp: new Date() });
-    await updateSoloStats(msg.author.id, "whoami", game.bet, false, 0);
-    whoAmIGames.delete(msg.author.id);
-    return msg.reply(`❌ للأسف توقع خاطئ واستنفدت الأسئلة. الشخصية كانت: **${game.target.name}**.`);
+    if (game.questionsAsked < 3) {
+      await game.gameMsg.edit({
+        content: `👤 **لعبة مين أنا؟**\nسؤالك: **${userText}**\nالجواب: **${result.answer}**\n\nباقي لك ${3 - game.questionsAsked} أسئلة! (تم شطب الشخصيات المستبعدة باللون الأسود). اسأل سؤالك التالي:`,
+        files: [newImg]
+      }).catch(() => {});
+    } else {
+      await game.gameMsg.edit({
+        content: `👤 **لعبة مين أنا؟**\nسؤالك الأخير: **${userText}**\nالجواب: **${result.answer}**\n\nخلصت أسئلتك! الحين عطني **توقعك النهائي** بالاسم:`,
+        files: [newImg]
+      }).catch(() => {});
+    }
+
+  } catch (error) {
+    console.error("Error processing question:", error);
+    // إعادة محاولة لو الذكاء الاصطناعي خرف وما رجع JSON صح
+    msg.reply("معليش ما فهمت عليك، تقدر تعيد صياغة سؤالك؟").then(m => setTimeout(() => m.delete(), 3000));
   }
 }
 
