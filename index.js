@@ -349,7 +349,7 @@ function createUIRouter(client) {
 const ui = createUIRouter(client);
 // ربط دوال التحويل بالراوتر عشان تشتغل الأزرار والقائمة
 ui.messageExact("تحويل", handleTransferMessage);
-ui.selectExact("bank_transfer_select_user", handleTransferSelectUser);
+ui.selectPrefix("bank_transfer_select_", handleTransferSelectUser);
 ui.buttonPrefix("bank_transfer_key_", handleTransferKeys);
 // ===== Solo Bet Flow =====
 ui.buttonExact("hit", handleMultiplayerBlackjackInteraction);
@@ -7068,10 +7068,10 @@ async function handleTextGameShortcut(msg, gameId) {
 
 
 /******************************************
- * اوامر المحفظة والتحويل — عبر الراوتر (تفاعلي + صور)
+ * أوامر المحفظة والتحويل — عبر الراوتر (تفاعلي + صور)
  ******************************************/
 
-// تحميل الافاتار/الرسم كما هو
+// تحميل الأفاتار/الرسم
 async function loadUserAvatar(user) {
   const url = user.displayAvatarURL({ extension: "png", size: 256 });
   return await loadImage(url);
@@ -7095,130 +7095,80 @@ function drawText(ctx, text, x, y, font = "100px", color = "#b0d4eb", align = "c
   ctx.fillText(text, x, y);
 }
 
-// امر "رصيد" (نفس كودك مع الصورة)
+// 1. أمر "رصيد" (يعرض الصورة الجاهزة مباشرة)
 async function handleWalletMessage(msg) {
-  const balance = await getBalance(msg.author.id);
-  const background = await loadImage(path.join(__dirname, "صوره المحفظه.png"));
-  const avatarImage = await loadUserAvatar(msg.author);
+  if (msg.author.bot) return;
+  const content = msg.content.trim();
+  if (content !== "رصيد") return;
 
-  const canvas = createCanvas(background.width, background.height);
-  const ctx = canvas.getContext("2d");
+  try {
+    const balance = await getBalance(msg.author.id);
+    const background = await loadImage(path.join(__dirname, "صوره المحفظه.png"));
+    const avatarImage = await loadUserAvatar(msg.author);
 
-  ctx.drawImage(background, 0, 0);
-  drawCircularImage(ctx, avatarImage, 294, 237, 139);
-  drawText(ctx, `${balance.toLocaleString("en-US")}`, 750, 605);
-  drawText(ctx, `${msg.author.id}`, 300, 950, "35px cairo");
+    const canvas = createCanvas(background.width, background.height);
+    const ctx = canvas.getContext("2d");
 
-  const buffer = canvas.toBuffer("image/png");
-  const attachment = new AttachmentBuilder(buffer, { name: "wallet.png" });
-  return msg.reply({ files: [attachment] });
+    ctx.drawImage(background, 0, 0);
+    drawCircularImage(ctx, avatarImage, 294, 237, 139);
+    drawText(ctx, `${balance.toLocaleString("en-US")}`, 750, 605);
+    drawText(ctx, `${msg.author.id}`, 300, 950, "35px Cairo");
+
+    const buffer = canvas.toBuffer("image/png");
+    const attachment = new AttachmentBuilder(buffer, { name: "wallet.png" });
+    return msg.reply({ files: [attachment] });
+  } catch (error) {
+    console.error("خطأ في أمر الرصيد:", error);
+    return msg.reply("❌ حدث خطأ أثناء تجهيز صورة المحفظة. تأكد من وجود ملف 'صوره المحفظه.png'.");
+  }
 }
 
 // ==========================================
-// نظام التحويل التفاعلي المدمج
+// 2. نظام التحويل التفاعلي المدمج (محمي + أزرار الاختصار)
 // ==========================================
 const transferState = new Map();
 
-function buildTransferControls(options) {
+function buildTransferControls(options, ownerId) {
   const select = new StringSelectMenuBuilder()
-    .setCustomId("bank_transfer_select_user")
+    .setCustomId(`bank_transfer_select_${ownerId}`)
     .setPlaceholder("اختر المستفيد")
     .addOptions(options);
 
+  // الصف الأول (أرقام + تصفير)
   const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("bank_transfer_key_1").setLabel("1").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("bank_transfer_key_2").setLabel("2").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("bank_transfer_key_3").setLabel("3").setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`bank_transfer_key_1_${ownerId}`).setLabel("1").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`bank_transfer_key_2_${ownerId}`).setLabel("2").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`bank_transfer_key_3_${ownerId}`).setLabel("3").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`bank_transfer_key_reset_${ownerId}`).setLabel("تصفير").setStyle(ButtonStyle.Danger)
   );
+
+  // الصف الثاني (أرقام + ربع)
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("bank_transfer_key_4").setLabel("4").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("bank_transfer_key_5").setLabel("5").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("bank_transfer_key_6").setLabel("6").setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`bank_transfer_key_4_${ownerId}`).setLabel("4").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`bank_transfer_key_5_${ownerId}`).setLabel("5").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`bank_transfer_key_6_${ownerId}`).setLabel("6").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`bank_transfer_key_quarter_${ownerId}`).setLabel("الربع").setStyle(ButtonStyle.Primary)
   );
+
+  // الصف الثالث (أرقام + نصف)
   const row3 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("bank_transfer_key_7").setLabel("7").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("bank_transfer_key_8").setLabel("8").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("bank_transfer_key_9").setLabel("9").setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`bank_transfer_key_7_${ownerId}`).setLabel("7").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`bank_transfer_key_8_${ownerId}`).setLabel("8").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`bank_transfer_key_9_${ownerId}`).setLabel("9").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`bank_transfer_key_half_${ownerId}`).setLabel("النصف").setStyle(ButtonStyle.Primary)
   );
-  const rowSelect = new ActionRowBuilder().addComponents(select);
+
+  // الصف الرابع (أدوات التحكم + فل)
   const rowCtrl = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId("bank_transfer_key_مسح").setEmoji("1419791356179644588").setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId("bank_transfer_key_0").setLabel("0").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId("bank_transfer_key_تأكيد").setEmoji("1419532910070857749").setStyle(ButtonStyle.Success)
+    new ButtonBuilder().setCustomId(`bank_transfer_key_del_${ownerId}`).setEmoji("1419791356179644588").setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId(`bank_transfer_key_0_${ownerId}`).setLabel("0").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`bank_transfer_key_confirm_${ownerId}`).setEmoji("1419532910070857749").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`bank_transfer_key_full_${ownerId}`).setLabel("الكل").setStyle(ButtonStyle.Primary)
   );
 
-  return [rowSelect, row1, row2, row3, rowCtrl];
+  return [new ActionRowBuilder().addComponents(select), row1, row2, row3, rowCtrl];
 }
 
-// امر "تحويل" يفتح الواجهة بدلاً من الأمر النصي القديم
-async function handleTransferMessage(msg) {
-  const content = msg.content.trim();
-  if (content !== "تحويل") return; // تجاهل أي شيء غير كلمة تحويل الصافية
-
-  const senderId = msg.author.id;
-  const walletBalance = await getBalance(senderId);
-
-  const embed = new EmbedBuilder()
-    .setTitle(`🏦 بنك ${msg.author.username}`)
-    .setColor("Gold")
-    .setDescription(`**الرصيد الحالي:** ${walletBalance.toLocaleString("en-US")} ريال\n`)
-    .addFields(
-      { name: "المبلغ الحالي", value: "—", inline: true },
-      { name: "المستفيد", value: "لم يتم الاختيار", inline: true }
-    );
-
-  let options = [];
-  if (msg.guild) {
-    try {
-      // جلب الأعضاء وتحويلهم لمصفوفة عادية لتفادي أخطاء الدوال
-      const fetchedMembers = await msg.guild.members.fetch({ limit: 30 });
-      const membersArray = Array.from(fetchedMembers.values());
-      
-      options = membersArray
-        .filter(m => !m.user?.bot && m.id !== senderId)
-        .map(m => ({ 
-          label: String(m.displayName || m.user?.username || "مستخدم").slice(0, 50), 
-          description: `ID: ${m.id}`, 
-          value: m.id 
-        }))
-        .slice(0, 25);
-    } catch (err) {
-      console.error("فشل جلب الأعضاء:", err);
-    }
-  }
-
-  if (options.length === 0) {
-    options.push({ label: "لا يوجد أعضاء (أو فشل الجلب)", value: "none" });
-  }
-
-  const controls = buildTransferControls(options);
-  transferState.set(senderId, { targetId: null, amount: "" });
-
-  return await msg.reply({ embeds: [embed], components: controls });
-}
-
-// معالج اختيار المستفيد (القائمة المنسدلة)
-async function handleTransferSelectUser(i) {
-  const userId = i.user.id;
-  const st = transferState.get(userId) || { targetId: null, amount: "" };
-  
-  st.targetId = i.values[0];
-  transferState.set(userId, st);
-  
-  const member = i.guild.members.cache.get(st.targetId);
-  const name = member ? member.displayName : "مستخدم غير معروف";
-
-  const embed = EmbedBuilder.from(i.message.embeds[0]);
-  const fields = embed.data.fields;
-  const idx = fields.findIndex(f => f.name === "المستفيد");
-  if (idx >= 0) fields[idx].value = `<@${st.targetId}> — **${name}**`;
-
-  return await i.update({ embeds: [embed] }).catch(() => {});
-}
-
-// ==========================================
-// قائمة الأعضاء الثابتة (لتفادي أخطاء جلب الأعضاء)
-// ==========================================
 const STATIC_USERS = [
   { name: "نايل", id: "532264405476573224" },
   { name: "لافندر", id: "545613574874071063" },
@@ -7233,10 +7183,9 @@ const STATIC_USERS = [
   { name: "خالد", id: "734187812236034108" }
 ];
 
-// امر "تحويل" يفتح الواجهة بدلاً من الأمر النصي القديم
 async function handleTransferMessage(msg) {
   const content = msg.content.trim();
-  if (content !== "تحويل") return; // تجاهل أي شيء غير كلمة تحويل الصافية
+  if (content !== "تحويل") return;
 
   const senderId = msg.author.id;
   const walletBalance = await getBalance(senderId);
@@ -7250,7 +7199,6 @@ async function handleTransferMessage(msg) {
       { name: "المستفيد", value: "لم يتم الاختيار", inline: true }
     );
 
-  // استخدام القائمة الثابتة واستبعاد المرسل نفسه
   const options = STATIC_USERS
     .filter(m => m.id !== senderId)
     .map(m => ({ 
@@ -7259,25 +7207,28 @@ async function handleTransferMessage(msg) {
       value: m.id 
     }));
 
-  if (options.length === 0) {
-    options.push({ label: "لا يوجد أعضاء", value: "none" });
-  }
+  if (options.length === 0) options.push({ label: "لا يوجد أعضاء", value: "none" });
 
-  const controls = buildTransferControls(options);
+  const controls = buildTransferControls(options, senderId);
   transferState.set(senderId, { targetId: null, amount: "" });
 
   return await msg.reply({ embeds: [embed], components: controls });
 }
 
-// معالج اختيار المستفيد (القائمة المنسدلة)
 async function handleTransferSelectUser(i) {
+  const ownerId = i.customId.replace("bank_transfer_select_", "");
+  
+  // حماية: منع أي شخص غير صاحب الرسالة من اختيار المستفيد
+  if (i.user.id !== ownerId) {
+    return i.reply({ content: "❌ عذراً، هذه القائمة خاصة بصاحب التحويل فقط!", ephemeral: true });
+  }
+
   const userId = i.user.id;
   const st = transferState.get(userId) || { targetId: null, amount: "" };
   
   st.targetId = i.values[0];
   transferState.set(userId, st);
   
-  // قراءة الاسم من القائمة الثابتة مباشرة
   const staticUser = STATIC_USERS.find(u => u.id === st.targetId);
   const name = staticUser ? staticUser.name : "مستخدم غير معروف";
 
@@ -7289,30 +7240,45 @@ async function handleTransferSelectUser(i) {
   return await i.update({ embeds: [embed] }).catch(() => {});
 }
 
-// معالج أزرار الأرقام وإصدار إيصال الصورة
 async function handleTransferKeys(i) {
-  const userId = i.user.id;
-  const key = i.customId.replace("bank_transfer_key_", "");
-  const st = transferState.get(userId) || { targetId: null, amount: "" };
+  // فصل الـ customId لقراءة الزر وصاحب الرسالة
+  // تركيبة الـ ID: bank_transfer_key_{action}_{ownerId}
+  const parts = i.customId.split("_");
+  const ownerId = parts[4];
+  const keyAction = parts[3]; 
 
-  if (key === "مسح") {
+  // حماية: منع أي شخص غير صاحب الرسالة من الضغط على الأزرار
+  if (i.user.id !== ownerId) {
+    return i.reply({ content: "❌ عذراً، هذه الأزرار خاصة بصاحب التحويل فقط!", ephemeral: true });
+  }
+
+  const userId = i.user.id;
+  const st = transferState.get(userId) || { targetId: null, amount: "" };
+  const senderBalance = await getBalance(userId);
+
+  // معالجة الأزرار الجديدة
+  if (keyAction === "del") {
     st.amount = st.amount.slice(0, -1);
-  } else if (/^\d$/.test(key)) {
-    if (st.amount.length < 10) st.amount += key;
+  } else if (keyAction === "reset") {
+    st.amount = "";
+  } else if (keyAction === "full") {
+    st.amount = senderBalance.toString();
+  } else if (keyAction === "half") {
+    st.amount = Math.floor(senderBalance / 2).toString();
+  } else if (keyAction === "quarter") {
+    st.amount = Math.floor(senderBalance / 4).toString();
+  } else if (/^\d$/.test(keyAction)) {
+    if (st.amount.length < 10) st.amount += keyAction;
   } 
-  else if (key === "تأكيد") {
+  else if (keyAction === "confirm") {
     const amount = parseInt(st.amount || "0");
     if (!st.targetId || st.targetId === "none") return i.reply({ content: "❌ اختر مستفيداً أولاً من القائمة.", ephemeral: true });
     if (!amount || amount <= 0) return i.reply({ content: "❌ أدخل مبلغاً صحيحاً.", ephemeral: true });
-
-    const senderBalance = await getBalance(userId);
     if (senderBalance < amount) return i.reply({ content: "❌ رصيدك غير كافٍ.", ephemeral: true });
 
-    // خصم وإضافة باستخدام دوالك الأساسية
     await subtractBalance(userId, amount);
     await addBalance(st.targetId, amount);
 
-    // تسجيل العملية في الداتابيس لكشف الحساب
     try {
       await db.collection("transactions").insertMany([
         { userId: String(userId), amount: -amount, reason: `تحويل إلى <@${st.targetId}>`, timestamp: new Date() },
@@ -7323,7 +7289,6 @@ async function handleTransferKeys(i) {
     transferState.delete(userId); 
     await i.update({ content: "⏳ جاري إصدار الإيصال...", embeds: [], components: [] }).catch(() => {});
 
-    // إنشاء صورة الإيصال وإرسالها
     try {
       const background = await loadImage(path.join(__dirname, "صوره التحويل.png"));
       const senderAvatar = await loadUserAvatar(i.user);
@@ -7333,7 +7298,7 @@ async function handleTransferKeys(i) {
         const receiverUser = await i.client.users.fetch(st.targetId);
         receiverAvatar = await loadUserAvatar(receiverUser);
       } catch {
-        receiverAvatar = senderAvatar; // احتياطي في حال فشل جلب صورة المستفيد
+        receiverAvatar = senderAvatar; 
       }
 
       const canvas = createCanvas(background.width, background.height);
@@ -7341,7 +7306,6 @@ async function handleTransferKeys(i) {
 
       ctx.drawImage(background, 0, 0);
 
-      // جلب الاسم من القائمة الثابتة للصورة
       const staticUser = STATIC_USERS.find(u => u.id === st.targetId);
       const nickname = staticUser ? staticUser.name : "مستخدم";
 
@@ -7350,7 +7314,7 @@ async function handleTransferKeys(i) {
       drawText(ctx, `${amount.toLocaleString("en-US")}`, 850, 430, "115px");
       drawText(ctx, `${nickname}`, 850, 530, "75px Cairo", "#b0d4eb", "center");
       drawText(ctx, `${st.targetId}`, 850, 600, "25px Cairo", "#b0d4eb", "center");
-      drawText(ctx, `${userId}`, 140, 1050, "35px c", "#b0d4eb", "left");
+      drawText(ctx, `${userId}`, 140, 1050, "35px Cairo", "#b0d4eb", "left");
 
       const buffer = await canvas.encode("png");
       const attachment = new AttachmentBuilder(buffer, { name: "transfer.png" });
@@ -7364,7 +7328,6 @@ async function handleTransferKeys(i) {
 
   transferState.set(userId, st);
 
-  // تحديث خانة المبلغ في الرسالة التفاعلية
   const embed = EmbedBuilder.from(i.message.embeds[0]);
   const fields = embed.data.fields;
   const idx = fields.findIndex(f => f.name === "المبلغ الحالي");
