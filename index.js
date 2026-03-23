@@ -7071,7 +7071,7 @@ async function handleTextGameShortcut(msg, gameId) {
  * أوامر المحفظة والتحويل — عبر الراوتر (تفاعلي + صور)
  ******************************************/
 
-// تحميل الأفاتار/الرسم (نحتاجها للمحفظة)
+// تحميل الأفاتار/الرسم (نحتاجها للتحويل)
 async function loadUserAvatar(user) {
   const url = user.displayAvatarURL({ extension: "png", size: 256 });
   return await loadImage(url);
@@ -7144,32 +7144,93 @@ function drawSmartBoxText(ctx, linesArray, box, color = "#0f433f", fontName = "C
   }
 }
 
-// 1. أمر "رصيد" (يعرض الصورة الجاهزة مباشرة)
+// ==========================================
+// 1. أمر "رصيد" (محفظة ذكية مع كشف الحساب)
+// ==========================================
 async function handleWalletMessage(msg) {
   if (msg.author.bot) return;
   const content = msg.content.trim();
   if (content !== "رصيد") return;
 
   try {
-    const balance = await getBalance(msg.author.id);
-    const background = await loadImage(path.join(__dirname, "صوره المحفظه.png"));
-    const avatarImage = await loadUserAvatar(msg.author);
+    const userId = msg.author.id;
+    const balance = await getBalance(userId);
+    
+    // جلب آخر 10 عمليات من قاعدة البيانات
+    let userTransactions = [];
+    try {
+      userTransactions = await db.collection("transactions")
+        .find({ userId: String(userId) })
+        .sort({ timestamp: -1 })
+        .limit(10)
+        .toArray();
+    } catch (e) {
+      console.error("فشل جلب العمليات:", e);
+    }
 
+    // تنسيق العمليات
+    const formattedTx = userTransactions.map(tx => {
+      const amt = tx.amount > 0 ? `+${tx.amount.toLocaleString("en-US")}` : `${tx.amount.toLocaleString("en-US")}`;
+      // تنظيف السبب من المنشن (تبديل الآيدي بكلمة "مستخدم" عشان تطلع الصورة مرتبة)
+      let reason = tx.reason || "عملية غير معروفة";
+      reason = reason.replace(/<@!?\d+>/g, "مستخدم"); 
+      return `${amt} ريال | ${reason}`;
+    });
+
+    if (formattedTx.length === 0) formattedTx.push("لا توجد عمليات سابقة");
+
+    // تقسيم العمليات: 5 للمربع الأول، و 5 للمربع الثاني
+    const firstHalf = formattedTx.slice(0, 5);
+    const secondHalf = formattedTx.slice(5, 10);
+
+    // اسم الصورة الجديدة بناءً على طلبك
+    const background = await loadImage(path.join(__dirname, "صوره المحفظه (2).png"));
     const canvas = createCanvas(background.width, background.height);
     const ctx = canvas.getContext("2d");
 
     ctx.drawImage(background, 0, 0);
-    drawCircularImage(ctx, avatarImage, 294, 237, 139);
-    // استخدمنا اللون الجديد هنا
-    drawText(ctx, `${balance.toLocaleString("en-US")}`, 750, 605, "100px", "#0f433f");
-    drawText(ctx, `${msg.author.id}`, 300, 950, "35px Cairo", "#0f433f");
 
-    const buffer = canvas.toBuffer("image/png");
+    // المربعات الذكية بناءً على الإحداثيات اللي عطيتني إياها
+    const boxes = {
+      date:    { x: 4, y: 15, w: 336, h: 45 },    // التاريخ
+      account: { x: 2, y: 117, w: 293, h: 40 },   // الحساب
+      balance: { x: 6, y: 418, w: 964, h: 78 },   // الرصيد
+      tx1_5:   { x: 558, y: 643, w: 578, h: 285 },// عمليات 1 إلى 5
+      tx6_10:  { x: 5, y: 644, w: 521, h: 283 }   // عمليات 6 إلى 10
+    };
+
+    const textColor = "#0f433f";
+
+    // 1. التاريخ والوقت
+    const currentDate = new Date();
+    const dateStr = currentDate.toLocaleDateString("en-GB") + " " + currentDate.toLocaleTimeString("en-US", { hour12: false });
+    drawSmartBoxText(ctx, [dateStr], boxes.date, textColor);
+
+    // 2. رقم الحساب (الآيدي)
+    drawSmartBoxText(ctx, [userId], boxes.account, textColor);
+
+    // 3. الرصيد
+    drawSmartBoxText(ctx, [`${balance.toLocaleString("en-US")} ريال`], boxes.balance, textColor);
+
+    // 4. العمليات (1 إلى 5)
+    if (firstHalf.length > 0) {
+      drawSmartBoxText(ctx, firstHalf, boxes.tx1_5, textColor);
+    }
+
+    // 5. العمليات (6 إلى 10)
+    if (secondHalf.length > 0) {
+      drawSmartBoxText(ctx, secondHalf, boxes.tx6_10, textColor);
+    } else if (userTransactions.length > 0 && secondHalf.length === 0) {
+      // مربع فارغ أو نضع نص خفيف إذا مافي عمليات كافية
+      drawSmartBoxText(ctx, ["-"], boxes.tx6_10, textColor);
+    }
+
+    const buffer = await canvas.encode("png");
     const attachment = new AttachmentBuilder(buffer, { name: "wallet.png" });
     return msg.reply({ files: [attachment] });
   } catch (error) {
     console.error("خطأ في أمر الرصيد:", error);
-    return msg.reply("❌ حدث خطأ أثناء تجهيز صورة المحفظة. تأكد من وجود ملف 'صوره المحفظه.png'.");
+    return msg.reply("❌ حدث خطأ أثناء تجهيز صورة المحفظة. تأكد من وجود ملف 'صوره المحفظه (2).png'.");
   }
 }
 
@@ -7337,7 +7398,7 @@ async function handleTransferKeys(i) {
 
       ctx.drawImage(background, 0, 0);
 
-      // المربعات الذكية بناءً على إحداثياتك
+      // المربعات الذكية بناءً على إحداثيات التحويل
       const boxes = {
         amount:   { x: 250, y: 459, w: 672, h: 52 },
         sender:   { x: 214, y: 553, w: 746, h: 81 },
@@ -7346,26 +7407,21 @@ async function handleTransferKeys(i) {
         date:     { x: 732, y: 290, w: 390, h: 44 }
       };
 
-      // 1. مبلغ التحويل
       const amountText = [`${amount.toLocaleString("en-US")} ريال`];
       drawSmartBoxText(ctx, amountText, boxes.amount, "#0f433f");
 
-      // 2. المرسل
       const senderName = i.user.displayName || i.user.username;
       const senderText = [`${senderName}`, `${userId}`];
       drawSmartBoxText(ctx, senderText, boxes.sender, "#0f433f");
 
-      // 3. المستقبل
       const staticUser = STATIC_USERS.find(u => u.id === st.targetId);
       const receiverName = staticUser ? staticUser.name : "مستخدم";
       const receiverText = [`${receiverName}`, `${st.targetId}`];
       drawSmartBoxText(ctx, receiverText, boxes.receiver, "#0f433f");
 
-      // 4. سبب الحوالة
       const randomReason = TRANSFER_REASONS[Math.floor(Math.random() * TRANSFER_REASONS.length)];
       drawSmartBoxText(ctx, [randomReason], boxes.reason, "#0f433f");
 
-      // 5. التاريخ والوقت
       const currentDate = new Date();
       const dateStr = currentDate.toLocaleDateString("en-GB") + " " + currentDate.toLocaleTimeString("en-US", { hour12: false });
       drawSmartBoxText(ctx, [dateStr], boxes.date, "#0f433f");
