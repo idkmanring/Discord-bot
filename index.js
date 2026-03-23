@@ -7139,7 +7139,7 @@ function buildTransferControls(options, ownerId) {
     new ButtonBuilder().setCustomId(`bank_transfer_key_1_${ownerId}`).setLabel("1").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`bank_transfer_key_2_${ownerId}`).setLabel("2").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`bank_transfer_key_3_${ownerId}`).setLabel("3").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`bank_transfer_key_reset_${ownerId}`).setLabel("تصفير").setStyle(ButtonStyle.Danger)
+    new ButtonBuilder().setCustomId(`bank_transfer_key_reset_${ownerId}`).setEmoji("1419525663638950019").setStyle(ButtonStyle.Secondary)
   );
 
   // الصف الثاني (أرقام + ربع)
@@ -7147,7 +7147,7 @@ function buildTransferControls(options, ownerId) {
     new ButtonBuilder().setCustomId(`bank_transfer_key_4_${ownerId}`).setLabel("4").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`bank_transfer_key_5_${ownerId}`).setLabel("5").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`bank_transfer_key_6_${ownerId}`).setLabel("6").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`bank_transfer_key_quarter_${ownerId}`).setLabel("الربع").setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId(`bank_transfer_key_quarter_${ownerId}`).setEmoji("1419791397141090385").setStyle(ButtonStyle.Secondary)
   );
 
   // الصف الثالث (أرقام + نصف)
@@ -7155,7 +7155,7 @@ function buildTransferControls(options, ownerId) {
     new ButtonBuilder().setCustomId(`bank_transfer_key_7_${ownerId}`).setLabel("7").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`bank_transfer_key_8_${ownerId}`).setLabel("8").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`bank_transfer_key_9_${ownerId}`).setLabel("9").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`bank_transfer_key_half_${ownerId}`).setLabel("النصف").setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId(`bank_transfer_key_half_${ownerId}`).setEmoji("1419791380833894604").setStyle(ButtonStyle.Secondary)
   );
 
   // الصف الرابع (أدوات التحكم + فل)
@@ -7163,12 +7163,11 @@ function buildTransferControls(options, ownerId) {
     new ButtonBuilder().setCustomId(`bank_transfer_key_del_${ownerId}`).setEmoji("1419791356179644588").setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId(`bank_transfer_key_0_${ownerId}`).setLabel("0").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`bank_transfer_key_confirm_${ownerId}`).setEmoji("1419532910070857749").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`bank_transfer_key_full_${ownerId}`).setLabel("الكل").setStyle(ButtonStyle.Primary)
+    new ButtonBuilder().setCustomId(`bank_transfer_key_full_${ownerId}`).setEmoji("1419791368536068177").setStyle(ButtonStyle.Secondary)
   );
 
   return [new ActionRowBuilder().addComponents(select), row1, row2, row3, rowCtrl];
 }
-
 const STATIC_USERS = [
   { name: "نايل", id: "532264405476573224" },
   { name: "لافندر", id: "545613574874071063" },
