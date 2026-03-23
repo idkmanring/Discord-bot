@@ -7071,7 +7071,7 @@ async function handleTextGameShortcut(msg, gameId) {
  * أوامر المحفظة والتحويل — عبر الراوتر (تفاعلي + صور)
  ******************************************/
 
-// تحميل الأفاتار/الرسم
+// تحميل الأفاتار/الرسم (نحتاجها للمحفظة)
 async function loadUserAvatar(user) {
   const url = user.displayAvatarURL({ extension: "png", size: 256 });
   return await loadImage(url);
@@ -7088,11 +7088,60 @@ function drawCircularImage(ctx, img, x, y, radius) {
   ctx.restore();
 }
 
-function drawText(ctx, text, x, y, font = "100px", color = "#b0d4eb", align = "center") {
+// تعديل اللون الافتراضي ليكون #0f433f
+function drawText(ctx, text, x, y, font = "100px", color = "#0f433f", align = "center") {
   ctx.font = font;
   ctx.fillStyle = color;
   ctx.textAlign = align;
   ctx.fillText(text, x, y);
+}
+
+// مصفوفة أسباب التحويل
+const TRANSFER_REASONS = [
+  "حوالة شخصية", "تبرعات", "علاج", "صدقات", 
+  "تسديد دين", "تسليف قرض", "مصاريف عائلية", 
+  "هدية", "شراء غرض", "سلفة مستردة"
+];
+
+// دالة الرسم الذكي داخل المربع
+function drawSmartBoxText(ctx, linesArray, box, color = "#0f433f", fontName = "Cairo") {
+  let fontSize = box.h; // نبدأ بأكبر خط ممكن يوسع الارتفاع
+  let fits = false;
+  const lineHeightMultiplier = 1.1; // المسافة بين السطور
+
+  // تصغير الخط لحد ما يركب العرض والطول
+  while (fontSize > 10 && !fits) {
+    ctx.font = `bold ${fontSize}px ${fontName}`;
+    let maxWidth = 0;
+    
+    // قياس أعرض سطر
+    for (let line of linesArray) {
+      const m = ctx.measureText(line);
+      if (m.width > maxWidth) maxWidth = m.width;
+    }
+
+    const totalHeight = fontSize * linesArray.length * lineHeightMultiplier;
+
+    if (maxWidth <= box.w * 0.95 && totalHeight <= box.h * 0.95) {
+      fits = true; // الخط مناسب
+    } else {
+      fontSize -= 2; // نصغر الخط حبتين ونحاول ثاني
+    }
+  }
+
+  // إعدادات الطباعة
+  ctx.fillStyle = color;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  // حساب نقطة البداية عشان يكون الكلام بمنتصف المربع عمودياً
+  const totalHeight = fontSize * linesArray.length * lineHeightMultiplier;
+  let startY = box.y + (box.h / 2) - (totalHeight / 2) + (fontSize / 2);
+
+  // طباعة السطور
+  for (let i = 0; i < linesArray.length; i++) {
+    ctx.fillText(linesArray[i], box.x + (box.w / 2), startY + (i * fontSize * lineHeightMultiplier));
+  }
 }
 
 // 1. أمر "رصيد" (يعرض الصورة الجاهزة مباشرة)
@@ -7111,8 +7160,9 @@ async function handleWalletMessage(msg) {
 
     ctx.drawImage(background, 0, 0);
     drawCircularImage(ctx, avatarImage, 294, 237, 139);
-    drawText(ctx, `${balance.toLocaleString("en-US")}`, 750, 605);
-    drawText(ctx, `${msg.author.id}`, 300, 950, "35px Cairo");
+    // استخدمنا اللون الجديد هنا
+    drawText(ctx, `${balance.toLocaleString("en-US")}`, 750, 605, "100px", "#0f433f");
+    drawText(ctx, `${msg.author.id}`, 300, 950, "35px Cairo", "#0f433f");
 
     const buffer = canvas.toBuffer("image/png");
     const attachment = new AttachmentBuilder(buffer, { name: "wallet.png" });
@@ -7134,7 +7184,6 @@ function buildTransferControls(options, ownerId) {
     .setPlaceholder("اختر المستفيد")
     .addOptions(options);
 
-  // الصف الأول (أرقام + تصفير)
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`bank_transfer_key_1_${ownerId}`).setLabel("1").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`bank_transfer_key_2_${ownerId}`).setLabel("2").setStyle(ButtonStyle.Secondary),
@@ -7142,7 +7191,6 @@ function buildTransferControls(options, ownerId) {
     new ButtonBuilder().setCustomId(`bank_transfer_key_reset_${ownerId}`).setEmoji("1419525663638950019").setStyle(ButtonStyle.Secondary)
   );
 
-  // الصف الثاني (أرقام + ربع)
   const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`bank_transfer_key_4_${ownerId}`).setLabel("4").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`bank_transfer_key_5_${ownerId}`).setLabel("5").setStyle(ButtonStyle.Secondary),
@@ -7150,7 +7198,6 @@ function buildTransferControls(options, ownerId) {
     new ButtonBuilder().setCustomId(`bank_transfer_key_quarter_${ownerId}`).setEmoji("1419791397141090385").setStyle(ButtonStyle.Secondary)
   );
 
-  // الصف الثالث (أرقام + نصف)
   const row3 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`bank_transfer_key_7_${ownerId}`).setLabel("7").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`bank_transfer_key_8_${ownerId}`).setLabel("8").setStyle(ButtonStyle.Secondary),
@@ -7158,7 +7205,6 @@ function buildTransferControls(options, ownerId) {
     new ButtonBuilder().setCustomId(`bank_transfer_key_half_${ownerId}`).setEmoji("1419791380833894604").setStyle(ButtonStyle.Secondary)
   );
 
-  // الصف الرابع (أدوات التحكم + فل)
   const rowCtrl = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`bank_transfer_key_del_${ownerId}`).setEmoji("1419791356179644588").setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId(`bank_transfer_key_0_${ownerId}`).setLabel("0").setStyle(ButtonStyle.Secondary),
@@ -7168,6 +7214,7 @@ function buildTransferControls(options, ownerId) {
 
   return [new ActionRowBuilder().addComponents(select), row1, row2, row3, rowCtrl];
 }
+
 const STATIC_USERS = [
   { name: "نايل", id: "532264405476573224" },
   { name: "لافندر", id: "545613574874071063" },
@@ -7217,7 +7264,6 @@ async function handleTransferMessage(msg) {
 async function handleTransferSelectUser(i) {
   const ownerId = i.customId.replace("bank_transfer_select_", "");
   
-  // حماية: منع أي شخص غير صاحب الرسالة من اختيار المستفيد
   if (i.user.id !== ownerId) {
     return i.reply({ content: "❌ عذراً، هذه القائمة خاصة بصاحب التحويل فقط!", ephemeral: true });
   }
@@ -7240,13 +7286,10 @@ async function handleTransferSelectUser(i) {
 }
 
 async function handleTransferKeys(i) {
-  // فصل الـ customId لقراءة الزر وصاحب الرسالة
-  // تركيبة الـ ID: bank_transfer_key_{action}_{ownerId}
   const parts = i.customId.split("_");
   const ownerId = parts[4];
   const keyAction = parts[3]; 
 
-  // حماية: منع أي شخص غير صاحب الرسالة من الضغط على الأزرار
   if (i.user.id !== ownerId) {
     return i.reply({ content: "❌ عذراً، هذه الأزرار خاصة بصاحب التحويل فقط!", ephemeral: true });
   }
@@ -7255,7 +7298,6 @@ async function handleTransferKeys(i) {
   const st = transferState.get(userId) || { targetId: null, amount: "" };
   const senderBalance = await getBalance(userId);
 
-  // معالجة الأزرار الجديدة
   if (keyAction === "del") {
     st.amount = st.amount.slice(0, -1);
   } else if (keyAction === "reset") {
@@ -7290,33 +7332,46 @@ async function handleTransferKeys(i) {
 
     try {
       const background = await loadImage(path.join(__dirname, "صوره التحويل.png"));
-      const senderAvatar = await loadUserAvatar(i.user);
-      
-      let receiverAvatar;
-      try {
-        const receiverUser = await i.client.users.fetch(st.targetId);
-        receiverAvatar = await loadUserAvatar(receiverUser);
-      } catch {
-        receiverAvatar = senderAvatar; 
-      }
-
       const canvas = createCanvas(background.width, background.height);
       const ctx = canvas.getContext("2d");
 
       ctx.drawImage(background, 0, 0);
 
-      const staticUser = STATIC_USERS.find(u => u.id === st.targetId);
-      const nickname = staticUser ? staticUser.name : "مستخدم";
+      // المربعات الذكية بناءً على إحداثياتك
+      const boxes = {
+        amount:   { x: 250, y: 459, w: 672, h: 52 },
+        sender:   { x: 214, y: 553, w: 746, h: 81 },
+        receiver: { x: 181, y: 677, w: 774, h: 88 },
+        reason:   { x: 260, y: 787, w: 651, h: 60 },
+        date:     { x: 732, y: 290, w: 390, h: 44 }
+      };
 
-      drawCircularImage(ctx, senderAvatar, 330, 237, 160);
-      drawCircularImage(ctx, receiverAvatar, 1320, 237, 160);
-      drawText(ctx, `${amount.toLocaleString("en-US")}`, 850, 430, "115px");
-      drawText(ctx, `${nickname}`, 850, 530, "75px Cairo", "#b0d4eb", "center");
-      drawText(ctx, `${st.targetId}`, 850, 600, "25px Cairo", "#b0d4eb", "center");
-      drawText(ctx, `${userId}`, 140, 1050, "35px Cairo", "#b0d4eb", "left");
+      // 1. مبلغ التحويل
+      const amountText = [`${amount.toLocaleString("en-US")} ريال`];
+      drawSmartBoxText(ctx, amountText, boxes.amount, "#0f433f");
+
+      // 2. المرسل
+      const senderName = i.user.displayName || i.user.username;
+      const senderText = [`${senderName}`, `${userId}`];
+      drawSmartBoxText(ctx, senderText, boxes.sender, "#0f433f");
+
+      // 3. المستقبل
+      const staticUser = STATIC_USERS.find(u => u.id === st.targetId);
+      const receiverName = staticUser ? staticUser.name : "مستخدم";
+      const receiverText = [`${receiverName}`, `${st.targetId}`];
+      drawSmartBoxText(ctx, receiverText, boxes.receiver, "#0f433f");
+
+      // 4. سبب الحوالة
+      const randomReason = TRANSFER_REASONS[Math.floor(Math.random() * TRANSFER_REASONS.length)];
+      drawSmartBoxText(ctx, [randomReason], boxes.reason, "#0f433f");
+
+      // 5. التاريخ والوقت
+      const currentDate = new Date();
+      const dateStr = currentDate.toLocaleDateString("en-GB") + " " + currentDate.toLocaleTimeString("en-US", { hour12: false });
+      drawSmartBoxText(ctx, [dateStr], boxes.date, "#0f433f");
 
       const buffer = await canvas.encode("png");
-      const attachment = new AttachmentBuilder(buffer, { name: "transfer.png" });
+      const attachment = new AttachmentBuilder(buffer, { name: "transfer_receipt.png" });
       
       return await i.editReply({ content: "✅ **تم التحويل بنجاح!**", files: [attachment] }).catch(() => {});
     } catch (err) {
