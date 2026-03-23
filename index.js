@@ -22,7 +22,7 @@ const express = require("express");
 const app = express();
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const genAIModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const genAIModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
 const whoAmIGames = new Map(); // حفظ جلسات لعبة مين أنا
 
