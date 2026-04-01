@@ -159,7 +159,7 @@ function drawCircularImage(ctx, img, x, y, size) {
 /******************************************
  * 2)        الاتصال بـ MongoDB          *
  ******************************************/
-const mongoUrl = "mongodb+srv://Nael:i8VFiKISASCUzX5O@discordbot.wzwjonu.mongodb.net/?retryWrites=true&w=majority&appName=DiscordBot";
+const mongoUrl = "mongodb+srv://Bots:Tl51R0bnMe1O4OeX@discordbot.gyvpxdk.mongodb.net/DiscordBots?retryWrites=true&w=majority&appName=DiscordBot";
 const mongoClient = new MongoClient(mongoUrl);
 let db;
 
@@ -178,7 +178,7 @@ async function connectToMongo() {
 connectToMongo();
 
 
-mongoose.connect('mongodb+srv://Nael:i8VFiKISASCUzX5O@discordbot.wzwjonu.mongodb.net/discord_casino?retryWrites=true&w=majority&appName=DiscordBot')
+mongoose.connect('mongodb+srv://Bots:Tl51R0bnMe1O4OeX@discordbot.gyvpxdk.mongodb.net/DiscordBots?retryWrites=true&w=majority&appName=DiscordBot')
   .then(() => console.log('<:icons8correct1002:1415979896433278986> Mongoose Connected!'))
   .catch((err) => console.error('<:icons8wrong1001:1415979909825695914> Mongoose Connection Error:', err));
 
