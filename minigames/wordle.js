@@ -1,15 +1,14 @@
 // minigames/wordle.js
 const { EmbedBuilder } = require("discord.js");
 const { createCanvas } = require("@napi-rs/canvas");
-const dictionary = require("../data/dictionary.json"); // تأكد من المسار الصحيح للقاموس
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+
+// إعداد Gemini API
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const WORDLE_LEN = 4;
 const WORDLE_MAX_ATTEMPTS = 5;
 const WORDLE_REWARD = 10000;
-
-const WORDLE_WORDS = Array.isArray(dictionary)
-  ? dictionary.filter(w => typeof w === "string").map(w => w.trim()).filter(w => [...w].length === WORDLE_LEN)
-  : [];
 
 const wordleSessions = new Map();
 
@@ -18,8 +17,53 @@ const ARABIC_ALPHABET = [
   "ط","ظ","ع","غ","ف","ق","ك","ل","م","ن","ه","و","ي","ة","ى","ؤ","ئ","ء"
 ];
 
-function pickRandom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+// ==========================================
+// 1. توليد الكلمة عبر Gemini والتحقق من MongoDB
+// ==========================================
+async function generateWordleWord(db) {
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+  const fallbacks = ["كتاب", "عالم", "تفاح", "كوكب", "قارب", "طريق", "جبال", "بحار", "وردة", "شجرة", "سريع", "حمار"];
+  let attempts = 0;
 
+  while (attempts < 5) {
+    try {
+      const prompt = `أعطني كلمة عربية واحدة فقط، اسم أو صفة صحيحة وذات معنى واضح ومألوف، مكونة من 4 حروف بالضبط (مثل: كوكب، سريع، كتاب، تفاح، بحار). لا تعطني أفعال مبنية للمجهول أو كلمات مدمجة بضمائر (مثل: ترده، لأنك). أجب بالكلمة فقط بدون تشكيل وبدون أي نص إضافي ولا مسافات.`;
+      
+      const result = await model.generateContent(prompt);
+      let word = result.response.text().trim();
+      
+      // تنظيف الكلمة: إزالة التشكيل وأخذ أول كلمة فقط للضمان
+      word = word.replace(/[\u064B-\u065F]/g, ''); 
+      word = word.split(/\s+/)[0]; 
+
+      // تنظيف أي رموز غير عربية
+      word = word.replace(/[^ء-ي]/g, '');
+
+      if (word.length === WORDLE_LEN) {
+        // التحقق إذا كانت الكلمة موجودة مسبقاً في قاعدة البيانات
+        const existing = await db.collection("wordle_words").findOne({ word });
+        if (!existing) {
+          // حفظها في القاعدة عشان ما تتكرر مستقبلاً
+          await db.collection("wordle_words").insertOne({ word, createdAt: new Date() });
+          return word;
+        }
+      }
+    } catch (err) {
+      console.error("Gemini Wordle Error:", err);
+    }
+    attempts++;
+  }
+  
+  // في حال فشل Gemini بعد 5 محاولات (لتفادي تعليق اللعبة)، نختار كلمة من القائمة الاحتياطية
+  const fallbackWord = fallbacks[Math.floor(Math.random() * fallbacks.length)];
+  await db.collection("wordle_words").updateOne({ word: fallbackWord }, { $set: { word: fallbackWord } }, { upsert: true });
+  return fallbackWord;
+}
+
+
+// ==========================================
+// 2. منطق تقييم الحروف ورسم اللوحة
+// ==========================================
 function updateLetterStates(states, guessChars, colorTags) {
   for (let i = 0; i < guessChars.length; i++) {
     const ch = guessChars[i];
@@ -70,7 +114,7 @@ function buildRowComponents(letters, colors, userId, attemptNo, action, enabled)
     disabled: true
   }));
 
-  letterButtons.reverse();
+  letterButtons.reverse(); // لضبط الاتجاه العربي (من اليمين لليسار)
 
   let actionButton;
   if (action === "restart") {
@@ -148,6 +192,8 @@ async function buildAlphabetBoardImage(states) {
 
 async function sendBoardMessage(channel, session, finalMsg) {
   const rows = [];
+  
+  // بناء الأزرار للمحاولات السابقة
   for (let i = 0; i < session.history.length; i++) {
     const entry = session.history[i];
     const isLast = i === session.history.length - 1;
@@ -159,11 +205,26 @@ async function sendBoardMessage(channel, session, finalMsg) {
     }
   }
 
+  // 🔴 إضافة زر الانسحاب في الجولة الأولى (قبل أي محاولة)
+  if (session.history.length === 0 && !finalMsg) {
+    rows.push({
+      type: 1,
+      components: [{
+        type: 2,
+        style: 4, // أحمر (Danger)
+        label: "انسحاب",
+        emoji: { id: "1408077754557136926", name: ":icons8leave100:" },
+        custom_id: `wordle_quit_${session.userId}_0`,
+        disabled: false
+      }]
+    });
+  }
+
   const remaining = WORDLE_MAX_ATTEMPTS - session.attempts;
   const baseLine = finalMsg
     ? (session.won
-        ? `<:icons8correct1002:1415979896433278986> أحسنت! الكلمة: ${session.word} — تم الفوز.`
-        : `<:icons8wrong1001:1415979909825695914> انتهت الجولة. الكلمة كانت: ${session.word}`)
+        ? `<:icons8correct1002:1415979896433278986> أحسنت! الكلمة: **${session.word}** — تم الفوز.`
+        : `<:icons8wrong1001:1415979909825695914> انتهت الجولة. الكلمة كانت: **${session.word}**`)
     : `📝 أرسل كلمة من ${WORDLE_LEN} أحرف. (محاولات متبقية: ${remaining})`;
 
   const img = await buildAlphabetBoardImage(session.letterStates);
@@ -181,7 +242,10 @@ async function sendBoardMessage(channel, session, finalMsg) {
   if (finalMsg) setTimeout(() => sent.delete().catch(() => {}), 25000);
 }
 
-// دالة مكررة للمحافظة على استقلالية الملف
+
+// ==========================================
+// 3. إدارة الرصيد والإحصائيات وجلسة اللعب
+// ==========================================
 async function updateBalanceWithLogLocally(db, userId, amount, reason) {
   await db.collection("users").updateOne(
     { userId: String(userId) },
@@ -193,7 +257,6 @@ async function updateBalanceWithLogLocally(db, userId, amount, reason) {
   });
 }
 
-// Stats functions
 async function wordleStatsPlayed(userId, db) {
   await db.collection("wordle_stats").updateOne(
     { userId: String(userId) },
@@ -223,19 +286,27 @@ async function wordleStatsLose(userId, db) {
 }
 
 async function startWordleForUser(channel, userId, db) {
-  if (!WORDLE_WORDS.length) return channel.send("<:icons8wrong1001:1415979909825695914> لا توجد كلمات بطول مناسب في القاموس.");
+  const loadingMsg = await channel.send("⏳ جاري توليد كلمة سرية جديدة وفريدة من 4 حروف...");
+  
+  // توليد الكلمة
+  const secret = await generateWordleWord(db);
+  
+  await loadingMsg.delete().catch(() => {});
   await wordleStatsPlayed(userId, db);
 
-  const secret = pickRandom(WORDLE_WORDS);
   const session = {
     userId, word: secret, attempts: 0, history: [], letterStates: {},
     currentMessage: null, ended: false, won: false, channelId: channel.id,
   };
   wordleSessions.set(userId, session);
+  
   await sendBoardMessage(channel, session, false);
 }
 
-// 📌 هذه الدالة تُستدعى من القائمة المنسدلة (Dropdown)
+
+// ==========================================
+// 4. المداخل (Handlers) التي يتم ربطها في index.js
+// ==========================================
 module.exports.startWordleFromMenu = async function(interaction, db) {
   const userId = interaction.user.id;
   const prev = wordleSessions.get(userId);
@@ -253,7 +324,6 @@ module.exports.startWordleFromMenu = async function(interaction, db) {
   await startWordleForUser(interaction.channel, userId, db);
 };
 
-// 📌 لمعالجة رسالة "حروف" القديمة
 module.exports.handleWordleStartMessage = async function(msg, db) {
   if (msg.author?.bot) return;
   const userId = msg.author.id;
@@ -270,7 +340,6 @@ module.exports.handleWordleStartMessage = async function(msg, db) {
   await startWordleForUser(msg.channel, userId, db);
 };
 
-// 📌 التقاط الكلمات (يتم ربطه في index.js)
 module.exports.handleWordleGuess = async function(msg, db) {
   if (msg.author?.bot) return;
   const userId = msg.author.id;
@@ -310,11 +379,10 @@ module.exports.handleWordleGuess = async function(msg, db) {
   await sendBoardMessage(msg.channel, s, false);
 };
 
-// 📌 أزرار ووردل (انسحاب/إعادة)
 module.exports.handleWordleButtons = async function(i, db) {
   const id = i.customId || "";
   const parts = id.split("_");
-  const action = parts[1];
+  const action = parts[1]; // quit أو restart
   const targetUserId = parts[2];
 
   if (i.user.id !== targetUserId) {
