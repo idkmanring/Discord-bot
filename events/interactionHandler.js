@@ -5,6 +5,13 @@ const startAsra3Game = require("../minigames/asra3");
 const startRakkibGame = require("../minigames/rakkib");
 const startFlagsCountryGame = require("../minigames/flags_country");
 const startFlagsCapitalGame = require("../minigames/flags_capital");
+
+// استدعاء ملفات حرف وحروف الجديدة 👇
+const { startHarfFromMenu } = require("../minigames/harf");
+const { startWordleFromMenu } = require("../minigames/wordle");
+const { startPicChallengeFromMenu } = require("../minigames/pic_challenge");
+const { startChainedWordsFromMenu } = require("../minigames/chained_words");
+
 const showMinigameStats = require("../utils/minigameStats");
 
 module.exports = async function handleInteraction(interaction, db) {
@@ -22,7 +29,11 @@ module.exports = async function handleInteraction(interaction, db) {
       asra3: startAsra3Game,
       rakkib: startRakkibGame,
       flags_country: startFlagsCountryGame,
-      flags_capital: startFlagsCapitalGame
+      flags_capital: startFlagsCapitalGame,
+      harf: startHarfFromMenu,     // ربط حرف
+      wordle: startWordleFromMenu,  // ربط حروف
+      pic_challenge: startPicChallengeFromMenu,
+      chained_words: startChainedWordsFromMenu
     };
 
     const runner = runners[gameId];
