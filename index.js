@@ -406,9 +406,6 @@ ui.buttonExact('confirm_timeout', handleShopButtons);
 ui.buttonExact('confirm_mute', handleShopButtons);
 ui.buttonExact('confirm_steal', handleShopButtons);
 
-// ===== Harf (Lobby + Game) =====
-ui.buttonPrefix('harf_', handleHarfButtons);
-ui.modalExact('harf_submit_modal', handleHarfModalSubmit);
 
 // ===== Specific Games =====
 // Blackjack solo
@@ -424,6 +421,59 @@ ui.buttonPrefix('buck_', handleBuckshotSoloButtons);
 // Mystery Box
 ui.buttonExact('box_quit', handleBoxButtons);
 ui.buttonPrefix('box_', handleBoxButtons); // box_1, box_2, box_3
+
+
+/// minigames
+// ربط الألعاب المستقلة (الميني قيمز)
+const harfModule = require("./minigames/harf");
+const wordleModule = require("./minigames/wordle");
+const chainedWordsModule = require("./minigames/chained_words");
+const picModule = require("./minigames/pic_challenge");
+// ربط لعبة حرف
+ui.messageExact("حرف", async (msg) => {
+  harfModule.startHarfGame(msg.channel.id);
+  harfModule.showHarfLobby(msg.channel);
+});
+ui.buttonPrefix("harf_", harfModule.handleAllHarfButtons);
+// ملاحظة: لو عندك Modal لحرف أضفه هنا: ui.modalExact('harf_submit_modal', harfModule.handleHarfModal);
+
+// ربط لعبة حروف (ووردل)
+ui.messageExact("حروف", (msg) => wordleModule.handleWordleStartMessage(msg, db));
+ui.messageExact("حروف!", (msg) => wordleModule.handleWordleStatsMessage(msg, db));
+ui.buttonPrefix("wordle_", (i) => wordleModule.handleWordleButtons(i, db));
+
+// فلتر التقاط الرسائل للعبة حروف
+ui.messageFilter(
+  (m) => {
+    if (!m?.author || m.author.bot) return false;
+    return wordleModule.hasActiveSession(m.author.id, m.channelId);
+  },
+  (m) => wordleModule.handleWordleGuess(m, db)
+);
+
+// ربط زر الانسحاب حق تحدي الصور
+ui.buttonPrefix("picchal_", (i) => picModule.handlePicChallengeButtons(i));
+
+// التقاط الشات لتحدي الصور
+ui.messageFilter(
+  (m) => {
+    if (!m?.author || m.author.bot) return false;
+    return picModule.hasActiveSession(m.author.id, m.channelId);
+  },
+  (m) => picModule.handlePicChallengeGuess(m, db)
+);
+
+// ربط أزرار سلسلة الكلمات (فوق، تحت، انسحاب)
+ui.buttonPrefix("chain_", (i) => chainedWordsModule.handleChainedWordsButtons(i));
+
+// التقاط الشات للعبة سلسلة الكلمات
+ui.messageFilter(
+  (m) => {
+    if (!m?.author || m.author.bot) return false;
+    return chainedWordsModule.hasActiveSession(m.author.id, m.channelId);
+  },
+  (m) => chainedWordsModule.handleChainedWordsGuess(m, db)
+);
 
 /******************************************
  * 🔌 ربط تريفيا مع الراوتر
@@ -505,14 +555,6 @@ const handleMinigameInteraction = require("./events/interactionHandler");  // م
 
 const handleShopCommand = require("./commands/shop");  // امر "المتجر"
 const handleShopInteraction = require("./shop");       // تفاعلات المتجر
-// لعبة حرف (داخل مجلد games)
-const harfModule = require("./games/harf");
-const startHarfGame = harfModule.startHarfGame || harfModule;                  // يدعم حالتي التصدير
-const showHarfLobby = harfModule.showHarfLobby || (async () => {});
-const handleHarfLobbyInteraction = harfModule.handleHarfLobbyInteraction || (async () => {});
-const handleHarfInteraction = harfModule.handleHarfInteraction || (async () => {});
-const handleHarfModal = harfModule.handleHarfModal || (async () => {});
-const handleHarfVote = harfModule.handleVote || (async () => {});             // ربط التصويت
 
 /******************************************
  * اوامر الرسائل (بدون messageCreate)
@@ -892,576 +934,6 @@ async function handleStatementMessage(msg) {
     return msg.reply("<:icons8wrong1001:1415979909825695914> حدث خطا اثناء جلب كشف الحساب.").catch(() => {});
   }
 }
-
-
-/******************************************
- *لعبة ورردل Wordle عربية   *
- ******************************************/
-
-// ===== Wordle Arabic (4 أحرف، رسائل جديدة، صورة حروف) =====
-const dictionary = require("./data/dictionary.json");
-
-// ثابت الطول وعدد المحاولات والمكافأة
-const WORDLE_LEN = 4;
-const WORDLE_MAX_ATTEMPTS = 5;
-const WORDLE_REWARD = 10000;
-
-// فلترة قاموس الكلمات إلى 4 أحرف فقط
-const WORDLE_WORDS = Array.isArray(dictionary)
-  ? dictionary
-      .filter(w => typeof w === "string")
-      .map(w => w.trim())
-      .filter(w => [...w].length === WORDLE_LEN)
-  : [];
-
-// جلسات لكل مستخدم
-// userId -> { word, attempts, history, letterStates, currentMessage, ended }
-const wordleSessions = new Map();
-
-// حروف عربية أساسية + حالات إضافية
-const ARABIC_ALPHABET = [
-  "ا","ب","ت","ث","ج","ح","خ","د","ذ","ر","ز","س","ش","ص","ض",
-  "ط","ظ","ع","غ","ف","ق","ك","ل","م","ن","ه","و","ي","ة","ى","ؤ","ئ","ء"
-];
-
-function pickRandom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-
-// تحديث حالات الحروف: green > purple > grey
-function updateLetterStates(states, guessChars, colorTags) {
-  for (let i = 0; i < guessChars.length; i++) {
-    const ch = guessChars[i];
-    const c = colorTags[i]; // green/purple/grey
-    const prev = states[ch];
-    if (c === "green") {
-      states[ch] = "green";
-    } else if (c === "purple") {
-      if (prev !== "green") states[ch] = "purple";
-    } else if (c === "grey") {
-      if (!prev) states[ch] = "grey";
-    }
-  }
-}
-
-// إنتاج ألوان كل حرف للتخمين بناءً على الكلمة السرية
-function judgeGuess(guessRaw, secretRaw) {
-  const guess = [...String(guessRaw)];
-  const secret = [...String(secretRaw)];
-  const len = WORDLE_LEN;
-
-  const res = new Array(len).fill("grey");
-  const remaining = {};
-
-  // أخضر أولاً
-  for (let i = 0; i < len; i++) {
-    if (guess[i] === secret[i]) {
-      res[i] = "green";
-    } else {
-      const ch = secret[i];
-      remaining[ch] = (remaining[ch] || 0) + 1;
-    }
-  }
-  // بنفسجي ثم رمادي
-  for (let i = 0; i < len; i++) {
-    if (res[i] === "green") continue;
-    const ch = guess[i];
-    if (remaining[ch] > 0) {
-      res[i] = "purple";
-      remaining[ch]--;
-    } else {
-      res[i] = "grey";
-    }
-  }
-  return res; // مصفوفة ألوان لكل موضع
-}
-
-// خريطة الألوان لزر ديسكورد
-const styleOf = (c) => (c === "green" ? 3 : c === "purple" ? 1 : 2);
-
-// إنشاء صف أزرار واحد من نتيجة تخمين
-// withQuitOrRestart: "quit" | "restart"
-// استبدل الدالة السابقة بهذه النسخة
-function buildRowComponents(letters, colors, userId, attemptNo, action, enabled) {
-  // أزرار الحروف (معطّلة دومًا)
-  const letterButtons = letters.map((ch, idx) => ({
-    type: 2,
-    style: styleOf(colors[idx]), // green=3, purple=1, grey=2
-    label: ch,
-    custom_id: `wordle_lock_${userId}_${attemptNo}_${idx}`,
-    disabled: true
-  }));
-
-  // قلب الترتيب شكليًا فقط كما هو مطلوب في الصف
-  letterButtons.reverse();
-
-// زر الإجراء (انسحاب أو إعادة) — مفعّل فقط إذا enabled=true وإلا Disabled + Secondary
-let actionButton;
-if (action === "restart") {
-  actionButton = {
-    type: 2,
-    style: enabled ? 3 : 2, // Success عند التمكين، وإلا Secondary
-    // لو تبي إعادة تكون إيموجي فقط أيضاً:
-    // emoji: { name: "🔁" },
-    emoji: { id: "1416507901425614948", name: ":icons8retry100:" }, // إيموجي مخصص
-    custom_id: `wordle_restart_${userId}_${attemptNo}`,
-    disabled: !enabled
-  };
-} else {
-  // انسحاب بإيموجي فقط (بدون label)
-  actionButton = {
-    type: 2,
-    style: enabled ? 4 : 2, // Danger عند التمكين، وإلا Secondary
-    emoji: { id: "1408077754557136926", name: ":icons8leave100:" }, // إيموجي مخصص
-    // بديل يونيكود إن حبيت: emoji: { name: "🚪" },
-    custom_id: `wordle_quit_${userId}_${attemptNo}`,
-    disabled: !enabled
-  };
-}
-
-  return {
-    type: 1,
-    components: [...letterButtons, actionButton]
-  };
-}
-
-
-// إنشاء صورة لوحة الحروف الملونة
-async function buildAlphabetBoardImage(states) {
-  const cellW = 54;
-  const cellH = 54;
-  const gap = 6;
-  const padding = 12;
-  const cols = 12;
-  const rows = Math.ceil(ARABIC_ALPHABET.length / cols);
-
-  const width = padding * 2 + cols * (cellW + gap);
-  const height = padding * 2 + rows * (cellH + gap) + 24;
-
-  const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext('2d');
-
-  // خلفية
-  ctx.fillStyle = "#000000ff";
-  ctx.fillRect(0, 0, width, height);
-
-  // عنوان
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 35px Cairo";
-  ctx.textAlign = "start";
-  ctx.textBaseline = "alphabetic";
-  ctx.direction = "rtl";
-  ctx.fillText("لوحة الحروف", padding + 275, padding + 16);
-
-  // رسم الحروف يمين ➜ يسار بدون أي قلب
-  let idx = 0;
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      if (idx >= ARABIC_ALPHABET.length) break;
-      const ch = ARABIC_ALPHABET[idx++];
-      const state = states[ch]; // green/purple/grey/undefined
-
-      let bg = "#99aab5"; // grey
-      if (state === "green") bg = "#2ecc71";
-      else if (state === "purple") bg = "#5865F2";
-      else if (!state) bg = "#4f545c"; // محايد
-
-      // احسب العمود من اليمين إلى اليسار
-      const colFromRight = c; // مؤشر بصري
-      const x = width - padding - (colFromRight + 1) * (cellW + gap);
-      const y = padding + 24 + r * (cellH + gap);
-
-      // خلفية الخلية
-      ctx.fillStyle = bg;
-      ctx.fillRect(x, y, cellW, cellH);
-
-      // حدود
-      ctx.strokeStyle = "#23272a";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x + 1, y + 1, cellW - 2, cellH - 2);
-
-      // الحرف
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 28px Cairo";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.direction = "rtl";
-      // رسم مباشر بلا أي scale أو قلب
-      ctx.fillText(ch, x + cellW / 2, y + cellH / 2);
-    }
-  }
-
-  return canvas.toBuffer("image/png");
-}
-
-// إرسال رسالة لوحة اللعب الحالية (رسالة جديدة دائمًا)
-// finalMsg: إذا true نضع زر "إعادة" في الصف الأخير، وإلا "انسحاب"
-async function sendBoardMessage(channel, session, finalMsg) {
-  const rows = [];
-  for (let i = 0; i < session.history.length; i++) {
-    const entry = session.history[i]; // { letters, colors }
-    const isLast = i === session.history.length - 1;
-
-    if (finalMsg) {
-      // نهاية الجولة: الصف الأخير زر إعادة (Enabled)، والباقي انسحاب Disabled Secondary
-      rows.push(
-        buildRowComponents(
-          entry.letters,
-          entry.colors,
-          session.userId,
-          i + 1,
-          isLast ? "restart" : "quit",
-          isLast // مفعّل فقط في الأخير
-        )
-      );
-    } else {
-      // أثناء اللعب: الصف الأخير انسحاب (Enabled)، وما قبله انسحاب Disabled Secondary
-      rows.push(
-        buildRowComponents(
-          entry.letters,
-          entry.colors,
-          session.userId,
-          i + 1,
-          "quit",
-          isLast // مفعّل فقط في الأخير
-        )
-      );
-    }
-  }
-
-  const remaining = WORDLE_MAX_ATTEMPTS - session.attempts;
-  const baseLine = finalMsg
-    ? (session.won
-        ? `<:icons8correct1002:1415979896433278986> أحسنت! الكلمة: ${session.word} — تم الفوز.`
-        : `<:icons8wrong1001:1415979909825695914> انتهت الجولة. الكلمة كانت: ${session.word}`)
-    : `📝 أرسل كلمة من ${WORDLE_LEN} أحرف. (محاولات متبقية: ${remaining})`;
-
-  const img = await buildAlphabetBoardImage(session.letterStates);
-
-  const sent = await channel.send({
-    content: `🎯 لعبة الحروف\n${baseLine}`,
-    components: rows,
-    files: [{ attachment: img, name: `letters_${session.userId}.png` }]
-  });
-
-  if (session.currentMessage) {
-    const oldMsg = session.currentMessage;
-    setTimeout(() => oldMsg.delete().catch(() => {}), 10000);
-  }
-
-  session.currentMessage = sent;
-
-  if (finalMsg) {
-    setTimeout(() => sent.delete().catch(() => {}), 25000);
-  }
-}
-
-
-async function startWordleForUser(channel, userId) {
-  if (!WORDLE_WORDS.length) {
-    await channel.send("<:icons8wrong1001:1415979909825695914> لا توجد كلمات بطول مناسب في القاموس.");
-    return;
-  }
-
-  // إحصائيات: زيادة عدد اللعب
-  await wordleStatsPlayed(userId);
-
-  const secret = pickRandom(WORDLE_WORDS);
-  const session = {
-    userId,
-    word: secret,
-    attempts: 0,
-    history: [],
-    letterStates: {}, // خريطة حرف -> green/purple/grey
-    currentMessage: null,
-    ended: false,
-    won: false,
-    channelId: channel.id, // ربط الجلسة بالقناة التي بدأت فيها
-  };
-
-  wordleSessions.set(userId, session);
-  await sendBoardMessage(channel, session, false);
-}
-
-// معالجة بدء اللعبة برسالة "حروف"
-async function handleWordleStartMessage(msg) {
-  try {
-    if (msg.author?.bot) return;
-    const userId = msg.author.id;
-
-    const prev = wordleSessions.get(userId);
-    // إذا توجد جلسة نشطة في قناة أخرى، لا نغلقها تلقائياً ونمنع البدء هنا
-    if (prev && !prev.ended && prev.channelId && prev.channelId !== msg.channel.id) {
-      return msg.reply(`لديك جولة نشطة في <#${prev.channelId}>. أنهِها هناك (زر "انسحاب") أو انتظر انتهائها، ثم اكتب: حروف`).catch(() => {});
-    }
-
-    // إن كانت جلسة سابقة في نفس القناة أو منتهية، نغلقها ونبدأ جولة جديدة
-    if (prev && !prev.ended) {
-      prev.ended = true;
-      if (prev.currentMessage) setTimeout(() => prev.currentMessage.delete().catch(() => {}), 1000);
-      wordleSessions.delete(userId);
-    }
-
-    await startWordleForUser(msg.channel, userId);
-  } catch (e) {
-    console.error("wordle start error:", e);
-    return msg.reply("حدث خطأ أثناء بدء لعبة الحروف.").catch(() => {});
-  }
-}
-
-// استقبال تخمينات اللاعب
-async function handleWordleGuess(msg) {
-  try {
-    if (msg.author?.bot) return;
-
-    const userId = msg.author.id;
-    const s = wordleSessions.get(userId);
-    if (!s || s.ended) return;
-
-    // رفض التخمين إذا كان في قناة غير القناة المرتبطة بالجولة
-    if (msg.channel.id !== s.channelId) return;
-
-    const text = (msg.content || "").trim();
-    if (!text || text === "حروف" || text === "حروف!") return;
-
-    const chars = [...text];
-    if (chars.length !== WORDLE_LEN) {
-      return msg.reply(`❗ أرسل كلمة من ${WORDLE_LEN} أحرف بالضبط.`).catch(() => {});
-    }
-
-    if (s.attempts >= WORDLE_MAX_ATTEMPTS) return;
-
-    s.attempts += 1;
-
-    // تقييم التخمين
-    const colors = judgeGuess(text, s.word);
-    s.history.push({ letters: [...text], colors });
-
-    // تحديث حالات الحروف للصورة
-    updateLetterStates(s.letterStates, [...text], colors);
-
-    const isWin = colors.every(c => c === "green");
-    if (isWin) {
-      s.ended = true;
-      s.won = true;
-
-      // مكافأة + إحصائيات الفوز
-      try {
-        await updateBalanceWithLog(db, userId, WORDLE_REWARD, "لعبة حروف: فوز");
-        await wordleStatsWin(userId, WORDLE_REWARD);
-      } catch (e) {
-        console.error("wordle reward/stats error:", e);
-      }
-
-      await sendBoardMessage(msg.channel, s, true);
-      wordleSessions.delete(userId);
-      return;
-    }
-
-    // استنفاد المحاولات
-    if (s.attempts >= WORDLE_MAX_ATTEMPTS) {
-      s.ended = true;
-      s.won = false;
-      await wordleStatsLose(userId);
-      await sendBoardMessage(msg.channel, s, true);
-      wordleSessions.delete(userId);
-      return;
-    }
-
-    // رسالة جولة جديدة (غير نهائية)
-    await sendBoardMessage(msg.channel, s, false);
-  } catch (e) {
-    console.error("wordle guess error:", e);
-    return msg.reply("حدث خطأ أثناء معالجة التخمين.").catch(() => {});
-  }
-}
-
-// أزرار: انسحاب/إعادة
-async function handleWordleButtons(i) {
-  try {
-    const id = i.customId || "";
-    if (!id.startsWith("wordle_")) return;
-
-    const parts = id.split("_"); // wordle_quit_{userId}_{attemptNo} | wordle_restart_{userId}_{attemptNo}
-    const action = parts[1];
-    const targetUserId = parts[2]; // attemptNo اختياري بالجزء [3]
-
-    // حماية: نفس صاحب الجلسة فقط
-    if (i.user.id !== targetUserId) {
-      if (!i.replied && !i.deferred) {
-        await i.reply({ content: "<:icons8wrong1001:1415979909825695914> هذه الجلسة ليست لك.", ephemeral: true }).catch(() => {});
-      }
-      return;
-    }
-
-    const s = wordleSessions.get(targetUserId);
-
-    // السماح دائمًا بـ "restart" حتى لو لا توجد جلسة (مثلاً بعد نهاية الجولة)
-    if (action === "restart") {
-      // إن كانت هناك جلسة نشطة في قناة مختلفة، امنع ووجّه للقناة الصحيحة
-      if (s && !s.ended && s.channelId && s.channelId !== i.channelId) {
-        if (!i.replied && !i.deferred) {
-          await i.reply({ content: `لديك جولة نشطة في <#${s.channelId}>. أنهيها هناك أولاً.`, ephemeral: true }).catch(() => {});
-        }
-        return;
-      }
-
-      if (!i.deferred && !i.replied) await i.deferUpdate().catch(() => {});
-
-      // إن وُجدت جلسة في نفس القناة ولم تُنهَ بعد، أغلقها بلطف ثم ابدأ من جديد
-      if (s && !s.ended) {
-        try {
-          s.ended = true;
-          if (s.currentMessage) setTimeout(() => s.currentMessage.delete().catch(() => {}), 500);
-        } catch {}
-        wordleSessions.delete(targetUserId);
-      }
-
-      // ابدأ جولة جديدة في نفس القناة الحالية
-      await startWordleForUser(i.channel, targetUserId);
-      return;
-    }
-
-    // من هنا فصاعدًا (Quit وغيره) تتطلب وجود جلسة
-    if (!s) {
-      if (!i.replied && !i.deferred) {
-        await i.reply({ content: "لا توجد جولة نشطة. أرسل: حروف", ephemeral: true }).catch(() => {});
-      }
-      return;
-    }
-
-    // قيد القناة: لا نسمح بالأزرار خارج قناة الجلسة
-    if (i.channelId !== s.channelId) {
-      if (!i.replied && !i.deferred) {
-        await i.reply({ content: `هذه الجولة نشطة فقط في <#${s.channelId}>.`, ephemeral: true }).catch(() => {});
-      }
-      return;
-    }
-
-    if (action === "quit") {
-      if (!i.deferred && !i.replied) await i.deferUpdate().catch(() => {});
-      if (s && !s.ended) {
-        s.ended = true;
-        s.won = false;
-        await wordleStatsLose(targetUserId);
-        await sendBoardMessage(i.channel, s, true);
-        wordleSessions.delete(targetUserId);
-      } else {
-        await i.channel.send("<:icons8wrong1001:1415979909825695914> لا توجد جولة نشطة. أرسل: حروف").catch(() => {});
-      }
-      return;
-    }
-
-    // إجراءات مستقبلية أخرى لو أضفتها...
-  } catch (e) {
-    console.error("wordle button error:", e);
-    try {
-      if (!i.replied && !i.deferred) await i.reply({ content: "حدث خطأ.", ephemeral: true });
-    } catch {}
-  }
-}
-
-// ===== إحصائيات Wordle في MongoDB =====
-async function wordleStatsPlayed(userId) {
-  try {
-    await db.collection("wordle_stats").updateOne(
-      { userId: String(userId) },
-      {
-        $inc: { played: 1 },
-        $setOnInsert: { wins: 0, earnings: 0, currentStreak: 0, bestStreak: 0 }
-      },
-      { upsert: true }
-    );
-  } catch (e) { console.error("wordleStatsPlayed:", e); }
-}
-
-async function wordleStatsWin(userId, reward) {
-  try {
-    await db.collection("wordle_stats").updateOne(
-      { userId: String(userId) },
-      {
-        $inc: { wins: 1, earnings: reward, currentStreak: 1 },
-        $max: { bestStreak: 0 }, // placeholder للتأكد من وجود الحقل
-      },
-      { upsert: true }
-    );
-    // تحديث bestStreak إذا لزم
-    const doc = await db.collection("wordle_stats").findOne({ userId: String(userId) }, { projection: { currentStreak: 1, bestStreak: 1 } });
-    if (doc && (doc.currentStreak || 0) > (doc.bestStreak || 0)) {
-      await db.collection("wordle_stats").updateOne(
-        { userId: String(userId) },
-        { $set: { bestStreak: doc.currentStreak || 0 } }
-      );
-    }
-  } catch (e) { console.error("wordleStatsWin:", e); }
-}
-
-async function wordleStatsLose(userId) {
-  try {
-    await db.collection("wordle_stats").updateOne(
-      { userId: String(userId) },
-      {
-        $set: { currentStreak: 0 },
-        $setOnInsert: { played: 0, wins: 0, earnings: 0, bestStreak: 0 }
-      },
-      { upsert: true }
-    );
-  } catch (e) { console.error("wordleStatsLose:", e); }
-}
-
-async function handleWordleStatsMessage(msg) {
-  try {
-    if (msg.author?.bot) return;
-    const userId = String(msg.author.id);
-    const s = await db.collection("wordle_stats").findOne({ userId }, { projection: { _id: 0 } });
-
-const played = s?.played || 0;
-const wins = s?.wins || 0;
-const earnings = s?.earnings || 0;
-const currentStreak = s?.currentStreak || 0;
-const bestStreak = s?.bestStreak || 0;
-const losses = Math.max(played - wins, 0);
-const winRate = played ? ((wins / played) * 100).toFixed(2) : "0.00";
-
-const embed = new EmbedBuilder()
-  .setTitle(" إحصائيات لعبة الحروف")
-  .setColor("Blue")
-  .addFields(
-    { name: "اللعبات", value: `${played}      <:icons8controller100:1407432162348634163>`, inline: true },
-    { name: "الانتصارات", value: `${wins}       <:icons8trophy100:1416394314904244234> `, inline: true },
-    { name: "الخسائر", value: `${losses}      <:icons8loss100:1416394312056442980> `, inline: true },
-    { name: "نسبة الفوز", value: `${winRate}%      <:icons8piechart100:1416394268716568789> `, inline: true },
-    { name: "سلسلة الانتصارات الحالية", value: `${currentStreak}         <:icons8series100:1416510089811988562>`, inline: true },
-    { name: "أفضل سلسلة", value: `${bestStreak}      <:icons8series1001:1416510081822101677> `, inline: true },
-    { name: "إجمالي الأرباح", value: `${earnings.toLocaleString("en-US")}           <:icons8money100:1416394266066030742> `, inline: true },
-  );
-  
-    return msg.reply({ embeds: [embed] });
-  } catch (e) {
-    console.error("wordle stats error:", e);
-    return msg.reply("حدث خطأ أثناء جلب إحصائياتك.").catch(() => {});
-  }
-}
-
-// ===== ربط الراوتر =====
-// بدء الجولة
-ui.messageExact("حروف", handleWordleStartMessage);
-// إحصائيات
-ui.messageExact("حروف!", handleWordleStatsMessage);
-// أزرار الانسحاب/إعادة
-ui.buttonPrefix("wordle_", handleWordleButtons);
-
-
-// التقاط رسائل صاحب الجلسة فقط للتخمين
-ui.messageFilter(
-  (m) => {
-    try {
-      if (!m?.author || m.author.bot) return false;
-      const s = wordleSessions.get(m.author.id);
-      // يلتقط فقط إذا كانت هناك جلسة نشطة لنفس المستخدم وفي نفس القناة
-      return Boolean(s && !s.ended && s.channelId === m.channelId);
-    } catch { return false; }
-  },
-  handleWordleGuess
-);
 
 /******************************************
  * نظام تحديد مبلغ الرهان (تصميم مفاتيح رقمي)
