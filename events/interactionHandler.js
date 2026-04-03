@@ -6,12 +6,13 @@ const startRakkibGame = require("../minigames/rakkib");
 const startFlagsCountryGame = require("../minigames/flags_country");
 const startFlagsCapitalGame = require("../minigames/flags_capital");
 
-// استدعاء ملفات حرف وحروف الجديدة 👇
+// استدعاء ملفات الألعاب الجديدة 👇
 const { startHarfFromMenu } = require("../minigames/harf");
 const { startWordleFromMenu } = require("../minigames/wordle");
 const { startPicChallengeFromMenu } = require("../minigames/pic_challenge");
 const { startChainedWordsFromMenu } = require("../minigames/chained_words");
-
+const { startFeudLobby } = require("../minigames/family_feud"); // 🔴 إضافة استدعاء صراع العائلات
+const { startDawamaLobby } = require("../minigames/dawama");
 const showMinigameStats = require("../utils/minigameStats");
 
 module.exports = async function handleInteraction(interaction, db) {
@@ -30,10 +31,12 @@ module.exports = async function handleInteraction(interaction, db) {
       rakkib: startRakkibGame,
       flags_country: startFlagsCountryGame,
       flags_capital: startFlagsCapitalGame,
-      harf: startHarfFromMenu,     // ربط حرف
-      wordle: startWordleFromMenu,  // ربط حروف
+      harf: startHarfFromMenu,     
+      wordle: startWordleFromMenu,  
       pic_challenge: startPicChallengeFromMenu,
-      chained_words: startChainedWordsFromMenu
+      chained_words: startChainedWordsFromMenu,
+      feud: startFeudLobby,
+      dawama: startDawamaLobby, // 🔴 ربط خيار الدوامة بالدالة
     };
 
     const runner = runners[gameId];
