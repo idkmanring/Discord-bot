@@ -429,6 +429,9 @@ const harfModule = require("./minigames/harf");
 const wordleModule = require("./minigames/wordle");
 const chainedWordsModule = require("./minigames/chained_words");
 const picModule = require("./minigames/pic_challenge");
+const feudModule = require("./minigames/family_feud");
+const dawamaModule = require("./minigames/dawama");
+
 // ربط لعبة حرف
 ui.messageExact("حرف", async (msg) => {
   harfModule.startHarfGame(msg.channel.id);
@@ -475,6 +478,30 @@ ui.messageFilter(
   (m) => chainedWordsModule.handleChainedWordsGuess(m, db)
 );
 
+// ربط أزرار صراع العائلات (اللوبي والأزرار داخل اللعبة) مع تمرير db
+ui.buttonPrefix("fl_", (i) => feudModule.handleFeudLobbyButtons(i, db));
+ui.buttonPrefix("feud_", (i) => feudModule.handleFeudActionButtons(i, db));
+
+// التقاط الشات للعبة صراع العائلات
+ui.messageFilter(
+  (m) => {
+    if (!m?.author || m.author.bot) return false;
+    return feudModule.hasActiveFeud(m.channelId);
+  },
+  (m) => feudModule.handleFeudMessages(m, db)
+);
+// ربط أزرار الدوامة (اللوبي وداخل اللعبة)
+ui.buttonPrefix("dwl_", (i) => dawamaModule.handleDawamaLobbyButtons(i, db));
+ui.buttonPrefix("dw_", (i) => dawamaModule.handleDawamaActionButtons(i, db));
+
+// التقاط الشات للعبة الدوامة
+ui.messageFilter(
+  (m) => {
+    if (!m?.author || m.author.bot) return false;
+    return dawamaModule.hasActiveDawama(m.channelId);
+  },
+  (m) => dawamaModule.handleDawamaMessages(m, db)
+);
 /******************************************
  * 🔌 ربط تريفيا مع الراوتر
  ******************************************/
@@ -517,7 +544,7 @@ ui.buttonExact("solo_roulette_cancel", handleSoloRouletteButtons);
 
 // ===== Message Commands =====
 ui.commandExact('المتجر', handleShopCommandMsg);
-ui.commandExact('ميني', handleMinigamesCommandMsg);
+ui.commandExact('العاب', handleMinigamesCommandMsg);
 ui.messagePrefix?.("تحويل", handleTransferMessage);
 ui.messageFilter?.((msg) => msg.content.trim().startsWith("تحويل"), handleTransferMessage);
 ui.messageExact("كشف", handleStatementMessage);
