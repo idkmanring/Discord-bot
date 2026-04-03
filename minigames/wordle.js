@@ -1,6 +1,6 @@
 // minigames/wordle.js
-const { EmbedBuilder } = require("discord.js");
-const { createCanvas } = require("@napi-rs/canvas");
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const { createCanvas, loadImage } = require("@napi-rs/canvas");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // إعداد Gemini API
@@ -12,57 +12,62 @@ const WORDLE_REWARD = 10000;
 
 const wordleSessions = new Map();
 
+// إزالة الحروف: ى, ؤ, ئ
 const ARABIC_ALPHABET = [
   "ا","ب","ت","ث","ج","ح","خ","د","ذ","ر","ز","س","ش","ص","ض",
-  "ط","ظ","ع","غ","ف","ق","ك","ل","م","ن","ه","و","ي","ة","ى","ؤ","ئ","ء"
+  "ط","ظ","ع","غ","ف","ق","ك","ل","م","ن","ه","و","ي","ة","ء"
 ];
 
 // ==========================================
 // 1. توليد الكلمة عبر Gemini والتحقق من MongoDB
 // ==========================================
 async function generateWordleWord(db) {
-  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
-  const fallbacks = ["كتاب", "عالم", "تفاح", "كوكب", "قارب", "طريق", "جبال", "بحار", "وردة", "شجرة", "سريع", "حمار"];
+  const model = genAI.getGenerativeModel({ 
+    model: "gemini-3.1-flash-lite-preview",
+    generationConfig: { temperature: 1.2 } // قللنا الإبداع شوي عشان ما يخترع كلمات غريبة
+  });
+  
+  const fallbacks = ["عالم", "كوكب", "قارب", "طريق", "جبال", "بحار", "وردة", "شجرة", "سريع", "حمار", "كتاب", "رياح", "عصفور", "شمس"];
   let attempts = 0;
 
   while (attempts < 5) {
     try {
-      const prompt = `أعطني كلمة عربية واحدة فقط، اسم أو صفة صحيحة وذات معنى واضح ومألوف، مكونة من 4 حروف بالضبط (مثل: كوكب، سريع، كتاب، تفاح، بحار). لا تعطني أفعال مبنية للمجهول أو كلمات مدمجة بضمائر (مثل: ترده، لأنك). أجب بالكلمة فقط بدون تشكيل وبدون أي نص إضافي ولا مسافات.`;
+      const prompt = `أنت خبير لغة عربية. أعطني كلمة عربية واحدة فقط، اسم أو صفة "حقيقية وموجودة في القاموس العربي"، مكونة من 4 حروف بالضبط.
+شروط صارمة جداً:
+1. الكلمة يجب أن تكون حقيقية 100% ولها معنى واضح (إياك أن تخترع حروفاً عشوائية لا معنى لها).
+2. إياك استخدام الحروف التالية أبداً: (ى، ؤ، ئ).
+3. ابتكر كلمة جديدة وفريدة في كل مرة. إياك تكرار الكلمات.
+4. أمثلة للتنسيق وللفهم فقط (يمنع استخدامها في ردك): كتاب، تفاح، قارب، بحار.
+5. أجب بالكلمة فقط بدون تشكيل وبدون مسافات وبدون أي نص إضافي.`;
       
       const result = await model.generateContent(prompt);
       let word = result.response.text().trim();
       
-      // تنظيف الكلمة: إزالة التشكيل وأخذ أول كلمة فقط للضمان
+      // تنظيف الكلمة
       word = word.replace(/[\u064B-\u065F]/g, ''); 
       word = word.split(/\s+/)[0]; 
-
-      // تنظيف أي رموز غير عربية
       word = word.replace(/[^ء-ي]/g, '');
 
-      if (word.length === WORDLE_LEN) {
-        // التحقق إذا كانت الكلمة موجودة مسبقاً في قاعدة البيانات
+      if (word.length === WORDLE_LEN && !word.includes('ى') && !word.includes('ؤ') && !word.includes('ئ')) {
         const existing = await db.collection("wordle_words").findOne({ word });
         if (!existing) {
-          // حفظها في القاعدة عشان ما تتكرر مستقبلاً
           await db.collection("wordle_words").insertOne({ word, createdAt: new Date() });
           return word;
         }
       }
     } catch (err) {
-      console.error("Gemini Wordle Error:", err);
+      console.error("Gemini Wordle Error:", err.message);
     }
     attempts++;
   }
   
-  // في حال فشل Gemini بعد 5 محاولات (لتفادي تعليق اللعبة)، نختار كلمة من القائمة الاحتياطية
   const fallbackWord = fallbacks[Math.floor(Math.random() * fallbacks.length)];
   await db.collection("wordle_words").updateOne({ word: fallbackWord }, { $set: { word: fallbackWord } }, { upsert: true });
   return fallbackWord;
 }
 
-
 // ==========================================
-// 2. منطق تقييم الحروف ورسم اللوحة
+// 2. منطق تقييم الحروف ورسم اللوحة (Grid + Keyboard)
 // ==========================================
 function updateLetterStates(states, guessChars, colorTags) {
   for (let i = 0; i < guessChars.length; i++) {
@@ -70,7 +75,7 @@ function updateLetterStates(states, guessChars, colorTags) {
     const c = colorTags[i];
     const prev = states[ch];
     if (c === "green") states[ch] = "green";
-    else if (c === "purple") { if (prev !== "green") states[ch] = "purple"; }
+    else if (c === "yellow") { if (prev !== "green") states[ch] = "yellow"; } // تغيير البنفسجي لأصفر
     else if (c === "grey") { if (!prev) states[ch] = "grey"; }
   }
 }
@@ -94,7 +99,7 @@ function judgeGuess(guessRaw, secretRaw) {
     if (res[i] === "green") continue;
     const ch = guess[i];
     if (remaining[ch] > 0) {
-      res[i] = "purple";
+      res[i] = "yellow"; // تغيير البنفسجي لأصفر
       remaining[ch]--;
     } else {
       res[i] = "grey";
@@ -103,143 +108,159 @@ function judgeGuess(guessRaw, secretRaw) {
   return res;
 }
 
-const styleOf = (c) => (c === "green" ? 3 : c === "purple" ? 1 : 2);
-
-function buildRowComponents(letters, colors, userId, attemptNo, action, enabled) {
-  const letterButtons = letters.map((ch, idx) => ({
-    type: 2,
-    style: styleOf(colors[idx]),
-    label: ch,
-    custom_id: `wordle_lock_${userId}_${attemptNo}_${idx}`,
-    disabled: true
-  }));
-
-  letterButtons.reverse(); // لضبط الاتجاه العربي (من اليمين لليسار)
-
-  let actionButton;
-  if (action === "restart") {
-    actionButton = {
-      type: 2,
-      style: enabled ? 3 : 2,
-      emoji: { id: "1416507901425614948", name: ":icons8retry100:" },
-      custom_id: `wordle_restart_${userId}_${attemptNo}`,
-      disabled: !enabled
-    };
-  } else {
-    actionButton = {
-      type: 2,
-      style: enabled ? 4 : 2,
-      emoji: { id: "1408077754557136926", name: ":icons8leave100:" },
-      custom_id: `wordle_quit_${userId}_${attemptNo}`,
-      disabled: !enabled
-    };
-  }
-
-  return { type: 1, components: [...letterButtons, actionButton] };
-}
-
-async function buildAlphabetBoardImage(states) {
-  const cellW = 54, cellH = 54, gap = 6, padding = 12, cols = 12;
-  const rows = Math.ceil(ARABIC_ALPHABET.length / cols);
-  const width = padding * 2 + cols * (cellW + gap);
-  const height = padding * 2 + rows * (cellH + gap) + 24;
-
+async function buildWordleImage(session) {
+  const width = 600;
+  const height = 850; // رفعنا الطول شوي عشان نستوعب المربعات الكبيرة
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
 
-  ctx.fillStyle = "#000000ff";
+  // رسم الخلفية الرئيسية
+  ctx.fillStyle = "#121213";
   ctx.fillRect(0, 0, width, height);
 
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 35px Cairo";
-  ctx.textAlign = "start";
-  ctx.textBaseline = "alphabetic";
-  ctx.direction = "rtl";
-  ctx.fillText("لوحة الحروف", padding + 275, padding + 16);
+  // --- 1. رسم شبكة المحاولات (Grid) مربعات كبيرة ---
+  const gridRows = WORDLE_MAX_ATTEMPTS; // 5
+  const gridCols = WORDLE_LEN; // 4
+  const cellSize = 95; // 🔴 كبرنا المربعات من 75 إلى 95
+  const cellGap = 12; // كبرنا المسافة شوي
+  const gridWidth = gridCols * cellSize + (gridCols - 1) * cellGap;
+  const gridStartX = (width - gridWidth) / 2;
+  const gridStartY = 40;
 
-  let idx = 0;
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      if (idx >= ARABIC_ALPHABET.length) break;
-      const ch = ARABIC_ALPHABET[idx++];
-      const state = states[ch];
+  for (let r = 0; r < gridRows; r++) {
+    const isHistory = r < session.history.length;
+    const rowData = isHistory ? session.history[r] : null;
 
-      let bg = "#99aab5";
-      if (state === "green") bg = "#2ecc71";
-      else if (state === "purple") bg = "#5865F2";
-      else if (!state) bg = "#4f545c";
+    for (let c = 0; c < gridCols; c++) {
+      // عربي: العمود صفر يكون في أقصى اليمين
+      const x = gridStartX + (gridCols - 1 - c) * (cellSize + cellGap);
+      const y = gridStartY + r * (cellSize + cellGap);
 
-      const colFromRight = c;
-      const x = width - padding - (colFromRight + 1) * (cellW + gap);
-      const y = padding + 24 + r * (cellH + gap);
+      let bgColor = "#121213";
+      let borderColor = "#3a3a3c";
+      let char = "";
 
-      ctx.fillStyle = bg;
-      ctx.fillRect(x, y, cellW, cellH);
-      ctx.strokeStyle = "#23272a";
+      if (isHistory) {
+        char = rowData.letters[c];
+        const colorState = rowData.colors[c];
+        
+        if (colorState === "green") {
+          bgColor = "#538d4e"; borderColor = "#538d4e";
+        } else if (colorState === "yellow") { // 🔴 التعديل للون الأصفر
+          bgColor = "#c9b458"; borderColor = "#c9b458";
+        } else {
+          bgColor = "#3a3a3c"; borderColor = "#3a3a3c";
+        }
+      }
+
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(x, y, cellSize, cellSize);
       ctx.lineWidth = 2;
-      ctx.strokeRect(x + 1, y + 1, cellW - 2, cellH - 2);
+      ctx.strokeStyle = borderColor;
+      ctx.strokeRect(x, y, cellSize, cellSize);
 
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 28px Cairo";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.direction = "rtl";
-      ctx.fillText(ch, x + cellW / 2, y + cellH / 2);
+      if (char) {
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 55px Cairo"; // 🔴 كبرنا الخط عشان يناسب المربع
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(char, x + cellSize / 2, y + cellSize / 2 + 5);
+      }
     }
   }
+
+  // --- 2. رسم الكيبورد الافتراضي (Keyboard) ---
+  const keyboardY = gridStartY + gridRows * (cellSize + cellGap) + 50;
+  const keyWidth = 46;
+  const keyHeight = 65;
+  const keyGap = 8;
+
+  // 3 صفوف متناسقة (إجمالي 30 حرف بدون ى، ؤ، ئ)
+  const keyboardLayout = [
+    ["ض", "ص", "ث", "ق", "ف", "غ", "ع", "ه", "خ", "ح"],
+    ["ج", "د", "ذ", "ش", "س", "ي", "ب", "ل", "ا", "ت"],
+    ["ن", "م", "ك", "ط", "ظ", "ز", "ر", "و", "ة", "ء"]
+  ];
+
+  for (let row = 0; row < keyboardLayout.length; row++) {
+    const keys = keyboardLayout[row];
+    const rowWidth = keys.length * keyWidth + (keys.length - 1) * keyGap;
+    const rowStartX = (width - rowWidth) / 2;
+
+    for (let col = 0; col < keys.length; col++) {
+      // اليمين لليسار
+      const char = keys[col];
+      const x = rowStartX + (keys.length - 1 - col) * (keyWidth + keyGap);
+      const y = keyboardY + row * (keyHeight + keyGap);
+
+      const state = session.letterStates[char];
+      let keyBg = "#818384"; // الرمادي الفاتح الافتراضي للكيبورد
+      
+      if (state === "green") keyBg = "#538d4e";
+      else if (state === "yellow") keyBg = "#c9b458"; // 🔴 التعديل للون الأصفر بالكيبورد
+      else if (state === "grey") keyBg = "#3a3a3c";
+
+      ctx.fillStyle = keyBg;
+      ctx.beginPath();
+      ctx.roundRect(x, y, keyWidth, keyHeight, 6);
+      ctx.fill();
+
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 26px Cairo";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(char, x + keyWidth / 2, y + keyHeight / 2 + 5);
+    }
+  }
+
   return canvas.toBuffer("image/png");
 }
 
 async function sendBoardMessage(channel, session, finalMsg) {
-  const rows = [];
-  
-  // بناء الأزرار للمحاولات السابقة
-  for (let i = 0; i < session.history.length; i++) {
-    const entry = session.history[i];
-    const isLast = i === session.history.length - 1;
+  const imgBuffer = await buildWordleImage(session);
+  const attachment = { attachment: imgBuffer, name: `wordle_${session.userId}.png` };
 
-    if (finalMsg) {
-      rows.push(buildRowComponents(entry.letters, entry.colors, session.userId, i + 1, isLast ? "restart" : "quit", isLast));
-    } else {
-      rows.push(buildRowComponents(entry.letters, entry.colors, session.userId, i + 1, "quit", isLast));
-    }
-  }
+  const componentsRow = new ActionRowBuilder();
 
-  // 🔴 إضافة زر الانسحاب في الجولة الأولى (قبل أي محاولة)
-  if (session.history.length === 0 && !finalMsg) {
-    rows.push({
-      type: 1,
-      components: [{
-        type: 2,
-        style: 4, // أحمر (Danger)
-        label: "انسحاب",
-        emoji: { id: "1408077754557136926", name: ":icons8leave100:" },
-        custom_id: `wordle_quit_${session.userId}_0`,
-        disabled: false
-      }]
-    });
+  // زر الانسحاب (دائماً موجود)
+  componentsRow.addComponents(
+    new ButtonBuilder()
+      .setCustomId(`wordle_quit_${session.userId}`)
+      .setLabel("انسحاب")
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji("1408077754557136926") // أيقونة الخروج
+  );
+
+  // زر الإعادة (يظهر فقط إذا انتهت الجولة)
+  if (finalMsg) {
+    componentsRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`wordle_restart_${session.userId}`)
+        .setLabel("إعادة اللعب")
+        .setStyle(ButtonStyle.Success)
+        .setEmoji("1416507901425614948") // أيقونة الإعادة
+    );
   }
 
   const remaining = WORDLE_MAX_ATTEMPTS - session.attempts;
   const baseLine = finalMsg
     ? (session.won
-        ? `<:icons8correct1002:1415979896433278986> أحسنت! الكلمة: **${session.word}** — تم الفوز.`
-        : `<:icons8wrong1001:1415979909825695914> انتهت الجولة. الكلمة كانت: **${session.word}**`)
-    : `📝 أرسل كلمة من ${WORDLE_LEN} أحرف. (محاولات متبقية: ${remaining})`;
+      ? `🎉 **أحسنت! الكلمة:** ${session.word} — تم الفوز!`
+      : `💀 **انتهت الجولة.** الكلمة الصحيحة كانت: **${session.word}**`)
+    : `📝 **اكتب كلمة من ${WORDLE_LEN} أحرف بالشات.** (محاولاتك: ${remaining})`;
 
-  const img = await buildAlphabetBoardImage(session.letterStates);
   const sent = await channel.send({
-    content: `🎯 لعبة الحروف\n${baseLine}`,
-    components: rows,
-    files: [{ attachment: img, name: `letters_${session.userId}.png` }]
+    content: `🎯 **لعبة الووردل (Wordle)**\n${baseLine}`,
+    files: [attachment],
+    components: [componentsRow]
   });
 
   if (session.currentMessage) {
     const oldMsg = session.currentMessage;
-    setTimeout(() => oldMsg.delete().catch(() => {}), 10000);
+    setTimeout(() => oldMsg.delete().catch(() => {}), 1000);
   }
   session.currentMessage = sent;
-  if (finalMsg) setTimeout(() => sent.delete().catch(() => {}), 25000);
+  if (finalMsg) setTimeout(() => sent.delete().catch(() => {}), 30000); // تنحذف بعد نصف دقيقة لعدم الإزعاج
 }
 
 
@@ -288,7 +309,6 @@ async function wordleStatsLose(userId, db) {
 async function startWordleForUser(channel, userId, db) {
   const loadingMsg = await channel.send("⏳ جاري توليد كلمة سرية جديدة وفريدة من 4 حروف...");
   
-  // توليد الكلمة
   const secret = await generateWordleWord(db);
   
   await loadingMsg.delete().catch(() => {});
@@ -305,7 +325,7 @@ async function startWordleForUser(channel, userId, db) {
 
 
 // ==========================================
-// 4. المداخل (Handlers) التي يتم ربطها في index.js
+// 4. المداخل (Handlers)
 // ==========================================
 module.exports.startWordleFromMenu = async function(interaction, db) {
   const userId = interaction.user.id;
@@ -324,32 +344,19 @@ module.exports.startWordleFromMenu = async function(interaction, db) {
   await startWordleForUser(interaction.channel, userId, db);
 };
 
-module.exports.handleWordleStartMessage = async function(msg, db) {
-  if (msg.author?.bot) return;
-  const userId = msg.author.id;
-  const prev = wordleSessions.get(userId);
-  
-  if (prev && !prev.ended && prev.channelId && prev.channelId !== msg.channel.id) {
-    return msg.reply(`لديك جولة نشطة في <#${prev.channelId}>. أنهِها هناك أولاً.`).catch(() => {});
-  }
-  if (prev && !prev.ended) {
-    prev.ended = true;
-    if (prev.currentMessage) setTimeout(() => prev.currentMessage.delete().catch(() => {}), 1000);
-    wordleSessions.delete(userId);
-  }
-  await startWordleForUser(msg.channel, userId, db);
-};
-
 module.exports.handleWordleGuess = async function(msg, db) {
   if (msg.author?.bot) return;
   const userId = msg.author.id;
   const s = wordleSessions.get(userId);
   if (!s || s.ended || msg.channel.id !== s.channelId) return;
 
-  const text = (msg.content || "").trim();
-  if (!text || text === "حروف" || text === "حروف!") return;
-  const chars = [...text];
-  if (chars.length !== WORDLE_LEN) return msg.reply(`❗ أرسل كلمة من ${WORDLE_LEN} أحرف بالضبط.`).catch(() => {});
+  const text = (msg.content || "").trim().replace(/\s+/g, '');
+  if (!text) return;
+  if (text.length !== WORDLE_LEN) {
+      msg.reply(`❗ أرسل كلمة من ${WORDLE_LEN} أحرف بالضبط.`).then(m => setTimeout(()=>m.delete().catch(()=> {}), 3000));
+      setTimeout(() => msg.delete().catch(() => {}), 1500);
+      return;
+  }
   if (s.attempts >= WORDLE_MAX_ATTEMPTS) return;
 
   s.attempts += 1;
@@ -358,6 +365,9 @@ module.exports.handleWordleGuess = async function(msg, db) {
   updateLetterStates(s.letterStates, [...text], colors);
 
   const isWin = colors.every(c => c === "green");
+  
+  setTimeout(() => msg.delete().catch(() => {}), 500); // حذف إجابة اللاعب للترتيب
+
   if (isWin) {
     s.ended = true;
     s.won = true;
@@ -376,6 +386,7 @@ module.exports.handleWordleGuess = async function(msg, db) {
     wordleSessions.delete(userId);
     return;
   }
+  
   await sendBoardMessage(msg.channel, s, false);
 };
 
@@ -437,16 +448,16 @@ module.exports.handleWordleStatsMessage = async function(msg, db) {
   const winRate = played ? ((wins / played) * 100).toFixed(2) : "0.00";
 
   const embed = new EmbedBuilder()
-    .setTitle(" إحصائيات لعبة الحروف")
+    .setTitle("📊 إحصائيات لعبة الووردل")
     .setColor("Blue")
     .addFields(
-      { name: "اللعبات", value: `${played}      <:icons8controller100:1407432162348634163>`, inline: true },
-      { name: "الانتصارات", value: `${wins}       <:icons8trophy100:1416394314904244234> `, inline: true },
-      { name: "الخسائر", value: `${losses}      <:icons8loss100:1416394312056442980> `, inline: true },
-      { name: "نسبة الفوز", value: `${winRate}%      <:icons8piechart100:1416394268716568789> `, inline: true },
-      { name: "سلسلة الحالية", value: `${currentStreak}         <:icons8series100:1416510089811988562>`, inline: true },
-      { name: "أفضل سلسلة", value: `${bestStreak}      <:icons8series1001:1416510081822101677> `, inline: true },
-      { name: "إجمالي الأرباح", value: `${earnings.toLocaleString("en-US")}           <:icons8money100:1416394266066030742> `, inline: true }
+      { name: "اللعبات", value: `${played}      🎮`, inline: true },
+      { name: "الانتصارات", value: `${wins}       🏆 `, inline: true },
+      { name: "الخسائر", value: `${losses}       ❌ `, inline: true },
+      { name: "نسبة الفوز", value: `${winRate}%       📈 `, inline: true },
+      { name: "السلسلة الحالية", value: `${currentStreak}         🔥`, inline: true },
+      { name: "أفضل سلسلة", value: `${bestStreak}      ⭐ `, inline: true },
+      { name: "إجمالي الأرباح", value: `${earnings.toLocaleString("en-US")}           💰 `, inline: true }
     );
   return msg.reply({ embeds: [embed] });
 };
