@@ -16,8 +16,10 @@ module.exports = async function handleMinigamesCommand(message) {
         // الألعاب الجديدة هنا 👇
         new StringSelectMenuOptionBuilder().setLabel(" حرف").setValue("harf").setEmoji("1416507901425614948"),
         new StringSelectMenuOptionBuilder().setLabel("حروف").setValue("wordle").setEmoji("📝"),
-        new StringSelectMenuOptionBuilder().setLabel(" تحدي الصور").setValue("pic_challenge").setEmoji("🖼️"),
-        new StringSelectMenuOptionBuilder().setLabel(" سلسلة الكلمات").setValue("chained_words").setEmoji("🔗")
+       // new StringSelectMenuOptionBuilder().setLabel(" تحدي الصور").setValue("pic_challenge").setEmoji("🖼️"),
+       // new StringSelectMenuOptionBuilder().setLabel(" سلسلة الكلمات").setValue("chained_words").setEmoji("🔗"),
+        new StringSelectMenuOptionBuilder().setLabel(" فاميلي فيود").setValue("feud").setEmoji("👨‍👩‍👧‍👦"),
+        new StringSelectMenuOptionBuilder().setLabel("الدوامة").setValue("dawama").setEmoji("🎡") // 🔴 إضافة اللعبة للقائمة
       )
   );
 
