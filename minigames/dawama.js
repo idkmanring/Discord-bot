@@ -547,7 +547,8 @@ module.exports.handleDawamaMessages = async function(msg, db) {
   clearGameTimer(game); 
 
   const text = msg.content.trim();
-  const normText = normalizeChar(text.toLowerCase());
+  // 🔴 التعديل السحري هنا: نفكك رسالة اللاعب حرف حرف ونوحدها عشان تتطابق 100% مع الجواب
+  const normText = text.toLowerCase().split("").map(c => normalizeChar(c)).join("");
 
   setTimeout(() => msg.delete().catch(() => {}), 5000);
 
@@ -624,7 +625,7 @@ module.exports.handleDawamaMessages = async function(msg, db) {
 
   else if (game.phase === "waiting_solve") {
     const guessClean = normText.replace(/\s+/g, "");
-    const correctClean = game.sentence.split("").map(c => normalizeChar(c)).join("").replace(/\s+/g, "");
+    const correctClean = game.sentence.toLowerCase().split("").map(c => normalizeChar(c)).join("").replace(/\s+/g, "");
 
     if (guessClean === correctClean) {
       let totalPot = game.players.reduce((sum, p) => sum + p.balance, 0);
