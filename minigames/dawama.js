@@ -536,6 +536,39 @@ module.exports.handleDawamaActionButtons = async function(i, db) {
   }
 };
 
+// ==========================================
+// دالة مساعدة لتنفيذ الفوز (عشان ما نكرر الكود)
+// ==========================================
+async function handleDawamaWin(msg, game, currentPlayer, db, isAutoWin = false) {
+  let totalPot = game.players.reduce((sum, p) => sum + p.balance, 0);
+  
+  await db.collection("users").updateOne(
+    { userId: String(currentPlayer.id) },
+    { $inc: { wallet: totalPot } },
+    { upsert: true }
+  );
+  await db.collection("transactions").insertOne({
+    userId: String(currentPlayer.id), amount: totalPot, reason: "فوز في لعبة الدوامة", timestamp: new Date()
+  });
+
+  game.revealed = game.sentence.split("").map(c => normalizeChar(c));
+  const imgBuffer = await buildDawamaImage(game);
+  const attachment = new AttachmentBuilder(imgBuffer, { name: "dawama_win.png" });
+
+  clearGameTimer(game);
+  activeGames.delete(game.channelId);
+  
+  const winReason = isAutoWin ? "كشف آخر حرف مخفي" : "حل الجملة صحيحة";
+
+  await msg.channel.send({
+    content: `🎉🎉 **مبروووووك!**\n<@${currentPlayer.id}> ${winReason} وسرق البنك بالكامل بإجمالي **${totalPot} ريال** 💰!`,
+    files: [attachment]
+  });
+}
+
+// ==========================================
+// التقاط الشات ومعالجة اللعب
+// ==========================================
 module.exports.handleDawamaMessages = async function(msg, db) {
   const game = activeGames.get(msg.channel.id);
   if (!game || game.isProcessing || msg.author.bot) return;
@@ -547,7 +580,6 @@ module.exports.handleDawamaMessages = async function(msg, db) {
   clearGameTimer(game); 
 
   const text = msg.content.trim();
-  // 🔴 التعديل السحري هنا: نفكك رسالة اللاعب حرف حرف ونوحدها عشان تتطابق 100% مع الجواب
   const normText = text.toLowerCase().split("").map(c => normalizeChar(c)).join("");
 
   setTimeout(() => msg.delete().catch(() => {}), 5000);
@@ -560,6 +592,7 @@ module.exports.handleDawamaMessages = async function(msg, db) {
     return;
   }
 
+  // --- عند اختيار حرف عادي ---
   if (game.phase === "waiting_consonant") {
     if (text.length !== 1 || VOWELS.includes(normText)) {
       msg.reply("اكتب حرف واحد غير مساعد!").then(m=>setTimeout(()=>m.delete().catch(()=>{}),3000));
@@ -579,6 +612,17 @@ module.exports.handleDawamaMessages = async function(msg, db) {
         game.revealed.push(normText);
         currentPlayer.balance += (count * game.currentPrize);
         currentPlayer.hasSecondChance = false; 
+
+        // 🔴 التحقق التلقائي من الفوز (هل كل الحروف انكشفت؟)
+        const sentenceCharsOnly = game.sentence.replace(/\s+/g, "").split("").map(c => normalizeChar(c));
+        const isFullyRevealed = sentenceCharsOnly.every(c => game.revealed.includes(c));
+
+        if (isFullyRevealed) {
+          await handleDawamaWin(msg, game, currentPlayer, db, true);
+          game.isProcessing = false;
+          return;
+        }
+
         msg.channel.send(`✅ كفو! لقيت ${count} حرف (${text})! الدور باقي معك.`).then(m=>setTimeout(()=>m.delete().catch(()=>{}),5000));
         game.phase = "idle";
       } else {
@@ -598,6 +642,7 @@ module.exports.handleDawamaMessages = async function(msg, db) {
     await renderGameState(msg.channel, game);
   } 
   
+  // --- عند اختيار حرف مساعد ---
   else if (game.phase === "waiting_vowel") {
     if (text.length !== 1 || !VOWELS.includes(normText)) {
       msg.reply("اكتب حرف مساعد (ا، و، ي) فقط!").then(m=>setTimeout(()=>m.delete().catch(()=>{}),3000));
@@ -613,6 +658,17 @@ module.exports.handleDawamaMessages = async function(msg, db) {
       const sentenceNorm = game.sentence.split("").map(c => normalizeChar(c));
       if (sentenceNorm.includes(normText)) {
         game.revealed.push(normText);
+        
+        // 🔴 التحقق التلقائي من الفوز (هل كل الحروف انكشفت؟)
+        const sentenceCharsOnly = game.sentence.replace(/\s+/g, "").split("").map(c => normalizeChar(c));
+        const isFullyRevealed = sentenceCharsOnly.every(c => game.revealed.includes(c));
+
+        if (isFullyRevealed) {
+          await handleDawamaWin(msg, game, currentPlayer, db, true);
+          game.isProcessing = false;
+          return;
+        }
+
         msg.channel.send(`✅ الحرف موجود! الدور باقي معك.`).then(m=>setTimeout(()=>m.delete().catch(()=>{}),4000));
         game.phase = "idle";
       } else {
@@ -623,34 +679,13 @@ module.exports.handleDawamaMessages = async function(msg, db) {
     await renderGameState(msg.channel, game);
   }
 
+  // --- عند محاولة الإجابة بكتابة الجملة كاملة ---
   else if (game.phase === "waiting_solve") {
     const guessClean = normText.replace(/\s+/g, "");
     const correctClean = game.sentence.toLowerCase().split("").map(c => normalizeChar(c)).join("").replace(/\s+/g, "");
 
     if (guessClean === correctClean) {
-      let totalPot = game.players.reduce((sum, p) => sum + p.balance, 0);
-      
-      await db.collection("users").updateOne(
-        { userId: String(currentPlayer.id) },
-        { $inc: { wallet: totalPot } },
-        { upsert: true }
-      );
-      await db.collection("transactions").insertOne({
-        userId: String(currentPlayer.id), amount: totalPot, reason: "فوز في لعبة الدوامة", timestamp: new Date()
-      });
-
-      game.revealed = game.sentence.split("").map(c => normalizeChar(c));
-      const imgBuffer = await buildDawamaImage(game);
-      const attachment = new AttachmentBuilder(imgBuffer, { name: "dawama_win.png" });
-
-      clearGameTimer(game);
-      activeGames.delete(game.channelId);
-      
-      await msg.channel.send({
-        content: `🎉🎉 **مبروووووك!**\n<@${currentPlayer.id}> حل الجملة صحيحة وسرق البنك بالكامل بإجمالي **${totalPot} ريال** 💰!`,
-        files: [attachment]
-      });
-
+      await handleDawamaWin(msg, game, currentPlayer, db, false);
     } else {
       msg.channel.send("❌ إجابة خاطئة! راحت عليك الفرصة وراح الدور للي بعدك.").then(m=>setTimeout(()=>m.delete().catch(()=>{}),4000));
       nextTurn(game);
