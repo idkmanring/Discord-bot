@@ -6663,8 +6663,28 @@ function drawSmartBoxText(ctx, linesArray, box, color = "#3eb8a1", fontName = "C
 }
 
 // ==========================================
-// 1. أمر "رصيد" (محفظة ذكية مع كشف الحساب)
+// 1. أمر "رصيد" (بروفايل اللاعب - محرك البيانات الذكي والدقيق 100%)
+// متوافق مع ملف الانديكس بدون أي أخطاء أو تعارض
 // ==========================================
+const { GoogleSpreadsheet } = require('google-spreadsheet');
+const { JWT } = require('google-auth-library');
+
+// دالة لتنظيف النصوص من الإيموجيات والرموز
+function cleanTextSafe(text) {
+  if (!text) return "";
+  return String(text).replace(/[^\u0600-\u06FFa-zA-Z0-9\s\-]/g, '').trim();
+}
+
+// فلتر الألعاب (يستبعد أي شيء مو قمار)
+function isExcludedGame(name) {
+  if (!name) return true;
+  const n = String(name).trim();
+  if (n === "" || n.includes("غير معروف") || n.includes("تحويل") || n.includes("استلام") || n.includes("راتب") || n.includes("يومي") || n.includes("مكافأة") || n.includes("هدية") || n.includes("عيدية") || n.includes("سلف") || n.includes("ربح من") || n.includes("ركب") || n.includes("فكك") || n.includes("جمع") || n.includes("سلسلة") || n.includes("حروف") || n.includes("حرف")) {
+    return true;
+  }
+  return false;
+}
+
 async function handleWalletMessage(msg) {
   if (msg.author.bot) return;
   const content = msg.content.trim();
@@ -6672,88 +6692,309 @@ async function handleWalletMessage(msg) {
 
   try {
     const userId = msg.author.id;
+    const user = msg.author;
+    const avatarUrl = user.displayAvatarURL({ extension: 'png', size: 256 });
+    const cleanUsername = cleanTextSafe(user.username) || "مستخدم";
+
+    // 1. جلب الرصيد
     const balance = await getBalance(userId);
     
-    // جلب آخر 10 عمليات من قاعدة البيانات
-    let userTransactions = [];
+    // 2. إحصائيات النشاط للفل
+    let msgsCount = 0;
+    let voiceSeconds = 0;
     try {
-      userTransactions = await db.collection("transactions")
-        .find({ userId: String(userId) })
-        .sort({ timestamp: -1 })
-        .limit(10)
-        .toArray();
-    } catch (e) {
-      console.error("فشل جلب العمليات:", e);
-    }
+      const activity = await db.collection("user_activity").findOne({ userId });
+      if (activity) {
+        msgsCount = activity.textStats?.validMessages || 0;
+        voiceSeconds = activity.voiceStats?.totalSeconds || 0;
+      }
+    } catch (e) {}
 
-    // تنسيق العمليات
-    const formattedTx = userTransactions.map(tx => {
-      const amt = tx.amount > 0 ? `+${tx.amount.toLocaleString("en-US")}` : `${tx.amount.toLocaleString("en-US")}`;
+    const voiceMinutes = Math.floor(voiceSeconds / 60);
+    const totalXP = Math.floor((msgsCount * 5) + (voiceMinutes * 2));
+    const currentLevel = Math.floor(Math.pow(totalXP / 100, 0.5)) + 1; 
+    const nextLevelBaseXP = Math.pow(currentLevel, 2) * 100;
+    const xpProgress = Math.min(totalXP / nextLevelBaseXP, 1);
+
+    // 3. استخراج أكبر فوز وأكبر خسارة من الفواتير (صفقة واحدة)
+    let biggestWin = 0;
+    let biggestLoss = 0;
+    try {
+      const userTxs = await db.collection("transactions").find({ 
+        userId: { $in: [userId, String(userId), Number(userId)] } 
+      }).toArray();
+
+      userTxs.forEach(tx => {
+        let amt = Number(tx.amount);
+        if (isNaN(amt)) return; 
+        
+        let reason = cleanTextSafe(tx.reason || tx.game || "");
+        if (!isExcludedGame(reason)) {
+            if (amt > biggestWin) biggestWin = amt;
+            if (amt < biggestLoss) biggestLoss = amt; 
+        }
+      });
+      biggestLoss = Math.abs(biggestLoss); 
+    } catch (e) {}
+
+    // 4. تحليل أداء الألعاب (من كولكشن solostats الخاص بك بدقة متناهية)
+    let txStats = [];
+    let highestWinNet = 0;
+    let highestLossNet = 0;
+    let mostWonGame = "لا يوجد";
+    let mostLostGame = "لا يوجد";
+
+    try {
+      const soloDoc = await db.collection("solostats").findOne({ userId: String(userId) });
       
-      let reason = tx.reason || "عملية غير معروفة";
-      // تنظيف السبب من المنشن (تبديل الآيدي بكلمة "مستخدم")
-      reason = reason.replace(/<@!?\d+>/g, "مستخدم"); 
-      // حذف الإيموجيات وأي رموز غريبة (نخلي بس حروف عربية/انجليزية، ارقام، مسافات)
-      reason = reason.replace(/[^\u0600-\u06FFa-zA-Z0-9\s\-]/g, '').trim(); 
-      
-      return `${amt} | ${reason}`;
-    });
+      // الدخول لبياناتك الصحيحة اللي أرسلت صورتها
+      if (soloDoc && soloDoc.stats) {
+        for (const [gameId, data] of Object.entries(soloDoc.stats)) {
+          if (isExcludedGame(gameId)) continue;
 
-    if (formattedTx.length === 0) formattedTx.push("لا توجد عمليات سابقة");
+          const wins = Number(data.wins || 0);
+          const loses = Number(data.loses || 0); // هذي الكلمة كانت تسبب المشكلة بالنسخ القديمة
+          const net = Number(data.net || 0);
+          
+          const displayName = typeof getArabicGameName === 'function' ? getArabicGameName(gameId) : cleanTextSafe(gameId);
 
-    // تقسيم العمليات: 5 للمربع الأول، و 5 للمربع الثاني
-    const firstHalf = formattedTx.slice(0, 5);
-    const secondHalf = formattedTx.slice(5, 10);
+          txStats.push({
+            _id: displayName,
+            winCount: wins,
+            lossCount: loses,
+            netAmount: net
+          });
 
-    const background = await loadImage(path.join(__dirname, "صوره المحفظه.png"));
-    const canvas = createCanvas(background.width, background.height);
+          // حساب أكثر لعبة ربحاً وخسارة بناءً على "الصافي"
+          if (net > highestWinNet) {
+            highestWinNet = net;
+            mostWonGame = displayName;
+          }
+          if (net < highestLossNet) { 
+            highestLossNet = net;
+            mostLostGame = displayName;
+          }
+        }
+      }
+    } catch (e) {}
+
+    // 5. سحب أكثر روم ويوم من قوقل شيت
+    let favChannel = "لا يوجد", activeDay = "لا يوجد";
+    try {
+      if (process.env.SHEET_ID) {
+        const auth = new JWT({ email: process.env.SHEET_CLIENT_EMAIL, key: process.env.SHEET_PRIVATE_KEY.replace(/\\n/g, '\n'), scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
+        const doc = new GoogleSpreadsheet(process.env.SHEET_ID, auth);
+        await doc.loadInfo();
+        const sheet = doc.sheetsByTitle['Messages'];
+        if (sheet) {
+          const rows = await sheet.getRows({ limit: 1000, offset: Math.max(0, sheet.rowCount - 1000) }); 
+          const channels = {}, days = {};
+          rows.forEach(r => {
+            if (r.get('user_id') === userId) {
+              const cName = r.get('channel_name');
+              const dateStr = r.get('timestamp') ? r.get('timestamp').split("T")[0] : null;
+              if (cName) channels[cName] = (channels[cName] || 0) + 1;
+              if (dateStr) days[dateStr] = (days[dateStr] || 0) + 1;
+            }
+          });
+          if (Object.keys(channels).length > 0) favChannel = cleanTextSafe(Object.keys(channels).reduce((a, b) => channels[a] > channels[b] ? a : b));
+          if (Object.keys(days).length > 0) activeDay = Object.keys(days).reduce((a, b) => days[a] > days[b] ? a : b);
+        }
+      }
+    } catch (e) {}
+
+    // ==========================================
+    // 🎨 الرسم (تخطيط شفاف ومثالي)
+    // ==========================================
+    const canvas = createCanvas(1920, 1080);
     const ctx = canvas.getContext("2d");
 
-    ctx.drawImage(background, 0, 0);
+    ctx.clearRect(0, 0, 1920, 1080);
 
-    // المربعات الذكية
-    const boxes = {
-      date:    { x: 4, y: 15, w: 336, h: 45 },    
-      account: { x: 2, y: 117, w: 293, h: 40 },   
-      balance: { x: 6, y: 418, w: 964, h: 78 },   
-      tx1_5:   { x: 558, y: 643, w: 578, h: 285 },
-      tx6_10:  { x: 5, y: 644, w: 521, h: 283 }   
-    };
-
-    const textColor = "#3eb8a1"; // اللون الجديد
-
-    // 1. التاريخ والوقت
-    const currentDate = new Date();
-    const dateStr = currentDate.toLocaleDateString("en-GB") + " " + currentDate.toLocaleTimeString("en-US", { hour12: false });
-    drawSmartBoxText(ctx, [dateStr], boxes.date, textColor);
-
-    // 2. رقم الحساب (الآيدي)
-    drawSmartBoxText(ctx, [userId], boxes.account, textColor);
-
-    // 3. الرصيد (بدون كلمة ريال)
-    drawSmartBoxText(ctx, [`${balance.toLocaleString("en-US")}`], boxes.balance, textColor);
-
-    // 4. العمليات (1 إلى 5)
-    if (firstHalf.length > 0) {
-      drawSmartBoxText(ctx, firstHalf, boxes.tx1_5, textColor);
+    function drawPanel(x, y, w, h) {
+      ctx.save();
+      ctx.fillStyle = "rgba(15, 20, 25, 0.75)"; 
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(x, y, w, h, 15) : ctx.fillRect(x, y, w, h);
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+      ctx.stroke();
+      ctx.restore();
     }
 
-    // 5. العمليات (6 إلى 10)
-    if (secondHalf.length > 0) {
-      drawSmartBoxText(ctx, secondHalf, boxes.tx6_10, textColor);
-    } else if (userTransactions.length > 0 && secondHalf.length === 0) {
-      drawSmartBoxText(ctx, ["-"], boxes.tx6_10, textColor);
+    const COLOR_TEXT = "#F8FAFC";
+    const COLOR_SUBTEXT = "#94A3B8";
+    const COLOR_ACCENT = "#FF8C00";
+    const COLOR_WIN = "#22C55E";
+    const COLOR_LOSS = "#EF4444";
+
+    drawPanel(50, 50, 1820, 230);   
+    drawPanel(990, 320, 880, 700);  
+    drawPanel(50, 320, 880, 700);   
+
+    // --- الصورة الشخصية ---
+    const avatar = await loadImage(avatarUrl);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(1740, 165, 85, 0, Math.PI * 2, true);
+    ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(avatar, 1655, 80, 170, 170);
+    ctx.restore();
+
+    ctx.beginPath();
+    ctx.arc(1740, 165, 85, 0, Math.PI * 2, true);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = COLOR_ACCENT;
+    ctx.stroke();
+
+    // --- اليوزر نيم واللفل ---
+    ctx.fillStyle = COLOR_TEXT;
+    ctx.font = "bold 55px Tahoma, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(cleanUsername, 1620, 140);
+
+    ctx.fillStyle = COLOR_ACCENT;
+    ctx.font = "bold 35px Tahoma, sans-serif";
+    ctx.fillText(`المستوى ${currentLevel}`, 1620, 190);
+
+    // --- شريط XP الدقيق ---
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(1220, 210, 400, 12, 6) : ctx.fillRect(1220, 210, 400, 12);
+    ctx.fill();
+    
+    ctx.fillStyle = COLOR_ACCENT;
+    const xpBarWidth = 400 * xpProgress;
+    if (xpBarWidth > 0) {
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(1620 - xpBarWidth, 210, xpBarWidth, 12, 6) : ctx.fillRect(1620 - xpBarWidth, 210, xpBarWidth, 12);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = COLOR_SUBTEXT;
+    ctx.font = "20px Tahoma, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(`${totalXP} / ${nextLevelBaseXP} XP`, 1620, 250);
+
+    // --- الرصيد ---
+    ctx.textAlign = "left";
+    ctx.fillStyle = COLOR_SUBTEXT;
+    ctx.font = "bold 30px Tahoma, sans-serif";
+    ctx.fillText("الرصيد الحالي", 90, 130);
+    
+    ctx.fillStyle = COLOR_TEXT; 
+    ctx.font = "bold 75px Tahoma, sans-serif";
+    ctx.fillText(`${balance.toLocaleString("en-US")}`, 90, 210);
+
+    // --- إحصائيات اللاعب ---
+    ctx.textAlign = "right";
+    ctx.fillStyle = COLOR_TEXT;
+    ctx.font = "bold 45px Tahoma, sans-serif";
+    ctx.fillText("إحصائيات اللاعب", 1820, 400);
+
+    const statsRight = [
+      { label: "إجمالي الرسائل", value: msgsCount.toLocaleString() },
+      { label: "ساعات الصوت", value: (voiceMinutes / 60).toFixed(1) },
+      { label: "أكثر روم نشاطاً", value: favChannel },
+      { label: "أكثر يوم نشاطاً", value: activeDay },
+      { label: "أكبر فوز", value: `+${biggestWin.toLocaleString()}`, color: COLOR_WIN },
+      { label: "أكبر خسارة", value: `${biggestLoss.toLocaleString()}`, color: COLOR_LOSS },
+      { label: "أكثر لعبة ربحاً", value: mostWonGame },
+      { label: "أكثر لعبة خسارة", value: mostLostGame }
+    ];
+
+    let startY = 480;
+    statsRight.forEach(stat => {
+      ctx.beginPath();
+      ctx.moveTo(1830, startY - 35);
+      ctx.lineTo(1030, startY - 35);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.textAlign = "right";
+      ctx.fillStyle = COLOR_SUBTEXT;
+      ctx.font = "30px Tahoma, sans-serif";
+      ctx.fillText(stat.label, 1830, startY);
+      
+      ctx.textAlign = "left";
+      ctx.fillStyle = stat.color || COLOR_TEXT;
+      ctx.font = "bold 35px Tahoma, sans-serif";
+      ctx.fillText(stat.value, 1030, startY); 
+      
+      startY += 65;
+    });
+
+    // --- أداء الألعاب ---
+    ctx.textAlign = "right";
+    ctx.fillStyle = COLOR_TEXT;
+    ctx.font = "bold 45px Tahoma, sans-serif";
+    ctx.fillText("أداء الألعاب (نسبة الفوز)", 890, 400);
+
+    const activeGames = txStats.filter(g => (g.winCount + g.lossCount) > 0);
+    const gameBars = activeGames.sort((a, b) => (b.winCount + b.lossCount) - (a.winCount + a.lossCount)).slice(0, 5); 
+    
+    let barY = 480;
+    const barX = 90; 
+    const maxBarWidth = 800;
+
+    if (gameBars.length === 0) {
+      ctx.textAlign = "center";
+      ctx.fillStyle = COLOR_SUBTEXT;
+      ctx.font = "35px Tahoma, sans-serif";
+      ctx.fillText("لم تقم بتجربة أي لعبة بعد.", 490, 600);
+    } else {
+      gameBars.forEach(game => {
+        const totalGames = game.winCount + game.lossCount;
+        const winRate = totalGames > 0 ? (game.winCount / totalGames) : 0;
+        const winPercentStr = Math.round(winRate * 100) + "%";
+
+        ctx.textAlign = "right";
+        ctx.fillStyle = COLOR_TEXT;
+        ctx.font = "bold 35px Tahoma, sans-serif";
+        ctx.fillText(game._id, 890, barY); 
+        
+        ctx.textAlign = "left";
+        ctx.fillStyle = COLOR_SUBTEXT;
+        ctx.font = "25px Tahoma, sans-serif";
+        ctx.fillText(`فوز: ${game.winCount} | خسارة: ${game.lossCount}`, barX, barY); 
+
+        ctx.fillStyle = winRate >= 0.5 ? COLOR_WIN : COLOR_LOSS;
+        ctx.fillText(`(${winPercentStr})`, barX + 220, barY);
+
+        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+        ctx.beginPath();
+        ctx.roundRect ? ctx.roundRect(barX, barY + 20, maxBarWidth, 20, 4) : ctx.fillRect(barX, barY + 20, maxBarWidth, 20);
+        ctx.fill();
+        
+        const barGradient = ctx.createLinearGradient(barX + maxBarWidth, 0, barX, 0);
+        barGradient.addColorStop(0, winRate >= 0.5 ? COLOR_ACCENT : COLOR_LOSS);
+        barGradient.addColorStop(1, winRate >= 0.5 ? COLOR_WIN : "#991B1B");
+        
+        ctx.fillStyle = barGradient;
+        const fillWidth = winRate * maxBarWidth;
+        if (fillWidth > 0) {
+          ctx.beginPath();
+          ctx.roundRect ? ctx.roundRect(barX + maxBarWidth - fillWidth, barY + 20, fillWidth, 20, 4) : ctx.fillRect(barX + maxBarWidth - fillWidth, barY + 20, fillWidth, 20);
+          ctx.fill();
+        }
+
+        barY += 105;
+      });
     }
 
     const buffer = await canvas.encode("png");
-    const attachment = new AttachmentBuilder(buffer, { name: "wallet.png" });
+    const attachment = new AttachmentBuilder(buffer, { name: "wallet_profile.png" });
+    
     return msg.reply({ files: [attachment] });
+
   } catch (error) {
-    console.error("خطأ في أمر الرصيد:", error);
-    return msg.reply("❌ حدث خطأ أثناء تجهيز صورة المحفظة. تأكد من وجود ملف 'صوره المحفظه.png'.");
+    console.error("خطأ في أمر الرصيد المطور:", error);
+    return msg.reply("❌ واجهت مشكلة في تجهيز بروفايلك.");
   }
 }
-
 // ==========================================
 // 2. نظام التحويل التفاعلي المدمج (محمي + أزرار الاختصار)
 // ==========================================
