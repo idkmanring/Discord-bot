@@ -15,8 +15,18 @@ dotenv.config();
 const activeGames = {};
 const fs = require('fs');
 const path = require('path');
+
+// ✨ تم تعديل هذا الجزء وإضافة الصلاحيات المطلوبة ✨
 const client = new Client({
-intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent,],}); require('dotenv').config();
+  intents: [
+    GatewayIntentBits.Guilds, 
+    GatewayIntentBits.GuildMessages, 
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildVoiceStates, // لمراقبة الرومات الصوتية
+    GatewayIntentBits.GuildMembers      // لمراقبة دخول/خروج الأعضاء وتغير الرتب
+  ],
+}); require('dotenv').config();
+
 const { createCanvas, loadImage , GlobalFonts } = require('@napi-rs/canvas');
 const express = require("express");
 const app = express();
@@ -157,7 +167,7 @@ function drawCircularImage(ctx, img, x, y, size) {
 }
 
 /******************************************
- * 2)        الاتصال بـ MongoDB          *
+ * 2)         الاتصال بـ MongoDB          *
  ******************************************/
 const mongoUrl = "mongodb+srv://Bots:Tl51R0bnMe1O4OeX@discordbot.gyvpxdk.mongodb.net/DiscordBots?retryWrites=true&w=majority&appName=DiscordBot";
 const mongoClient = new MongoClient(mongoUrl);
@@ -169,21 +179,19 @@ async function connectToMongo() {
     db = mongoClient.db("discord_casino");
     console.log(" MongoDB Connected!");
 
+    // ✨ تم إضافة نظام المراقبة هنا ✨
+    require('./events/activityTracker')(client, db);
 
   } catch (err) {
-
     console.error(" MongoDB Connection Error:", err);
   }
 }
+// استدعاء الدالة مرة وحدة فقط
 connectToMongo();
-
 
 mongoose.connect('mongodb+srv://Bots:Tl51R0bnMe1O4OeX@discordbot.gyvpxdk.mongodb.net/DiscordBots?retryWrites=true&w=majority&appName=DiscordBot')
   .then(() => console.log('<:icons8correct1002:1415979896433278986> Mongoose Connected!'))
   .catch((err) => console.error('<:icons8wrong1001:1415979909825695914> Mongoose Connection Error:', err));
-
-
-
 
 client.login(process.env.DISCORD_TOKEN);
 
