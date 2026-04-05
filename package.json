@@ -24,6 +24,8 @@
     "filesize": "^11.0.2",
     "form-data": "^4.0.3",
     "gif-encoder-2": "^1.0.5",
+    "google-auth-library": "^10.6.2",
+    "google-spreadsheet": "^5.2.0",
     "google-tts-api": "^2.0.2",
     "http-proxy-middleware": "^3.0.5",
     "humanize-duration": "^3.33.0",
