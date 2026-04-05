@@ -6899,7 +6899,7 @@ async function handleWalletMessage(msg) {
       { label: "ساعات الصوت", value: (voiceMinutes / 60).toFixed(1) },
       { label: "أكثر روم نشاطاً", value: favChannel },
       { label: "أكثر يوم نشاطاً", value: activeDay },
-      { label: "أكبر فوز", value: `+${biggestWin.toLocaleString()}`, color: COLOR_WIN },
+      { label: "أكبر فوز", value: `${biggestWin.toLocaleString()}`, color: COLOR_WIN },
       { label: "أكبر خسارة", value: `${biggestLoss.toLocaleString()}`, color: COLOR_LOSS },
       { label: "أكثر لعبة ربحاً", value: mostWonGame },
       { label: "أكثر لعبة خسارة", value: mostLostGame }
