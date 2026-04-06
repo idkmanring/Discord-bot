@@ -439,7 +439,7 @@ const chainedWordsModule = require("./minigames/chained_words");
 const picModule = require("./minigames/pic_challenge");
 const feudModule = require("./minigames/family_feud");
 const dawamaModule = require("./minigames/dawama");
-
+const passGameModule = require("./minigames/passguess");
 // ربط لعبة حرف
 ui.messageExact("حرف", async (msg) => {
   harfModule.startHarfGame(msg.channel.id);
@@ -509,6 +509,23 @@ ui.messageFilter(
     return dawamaModule.hasActiveDawama(m.channelId);
   },
   (m) => dawamaModule.handleDawamaMessages(m, db)
+);
+
+// مع الأزرار
+ui.buttonPrefix("pgl_", (i) => passGameModule.handleLobbyButtons(i)); // أزرار اللوبي
+ui.buttonPrefix("pgp_", (i) => passGameModule.handlePrepButtons(i)); // أزرار التجهيز للأونلاين
+ui.buttonPrefix("pg_", (i) => passGameModule.handleGameButtons(i)); // أزرار اللعبة (انسحاب)
+
+// ربط المودال الخاص باختيار الرقم السري
+ui.modalPrefix("pg_modal_pass_", (i) => passGameModule.handleModal(i));
+
+// التقاط الشات الخاص باللعبة
+ui.messageFilter(
+  (m) => {
+    if (!m?.author || m.author.bot) return false;
+    return passGameModule.hasActiveGame(m.channelId);
+  },
+  (m) => passGameModule.handleMessages(m, db)
 );
 /******************************************
  * 🔌 ربط تريفيا مع الراوتر
