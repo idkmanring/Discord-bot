@@ -6,7 +6,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 // ⚙️ إعدادات الجريدة
 const NEWSPAPER_CHANNEL_ID = "1418474888989245572";
 const TEMPLATE_IMAGE_PATH = path.join(__dirname, "IMG_3786.jpg"); 
-const CHECK_INTERVAL = 10 * 1000; // للتجربة كل 10 ثواني (رجعها 5 * 60 * 1000 لاحقاً)
+const CHECK_INTERVAL = 15 * 60 * 1000; // للتجربة كل 10 ثواني (رجعها 5 * 60 * 1000 لاحقاً)
 
 // 🧠 إعداد الذكاء الاصطناعي
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
