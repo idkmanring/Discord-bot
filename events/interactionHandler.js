@@ -14,7 +14,7 @@ const { startChainedWordsFromMenu } = require("../minigames/chained_words");
 const { startFeudLobby } = require("../minigames/family_feud"); // 🔴 إضافة استدعاء صراع العائلات
 const { startDawamaLobby } = require("../minigames/dawama");
 const showMinigameStats = require("../utils/minigameStats");
-
+const { startPasswordLobby } = require("../minigames/passguess");
 module.exports = async function handleInteraction(interaction, db) {
   if (!interaction.isStringSelectMenu() && !interaction.isButton()) return;
 
@@ -36,7 +36,8 @@ module.exports = async function handleInteraction(interaction, db) {
       pic_challenge: startPicChallengeFromMenu,
       chained_words: startChainedWordsFromMenu,
       feud: startFeudLobby,
-      dawama: startDawamaLobby, // 🔴 ربط خيار الدوامة بالدالة
+      dawama: startDawamaLobby,
+      password: startPasswordLobby, // 🔴 ربط خيار كلمة المرور بالدالة
     };
 
     const runner = runners[gameId];
