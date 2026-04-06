@@ -19,7 +19,8 @@ module.exports = async function handleMinigamesCommand(message) {
        // new StringSelectMenuOptionBuilder().setLabel(" تحدي الصور").setValue("pic_challenge").setEmoji("🖼️"),
        // new StringSelectMenuOptionBuilder().setLabel(" سلسلة الكلمات").setValue("chained_words").setEmoji("🔗"),
         new StringSelectMenuOptionBuilder().setLabel(" فاميلي فيود").setValue("feud").setEmoji("👨‍👩‍👧‍👦"),
-        new StringSelectMenuOptionBuilder().setLabel("الدوامة").setValue("dawama").setEmoji("🎡") // 🔴 إضافة اللعبة للقائمة
+        new StringSelectMenuOptionBuilder().setLabel("الدوامة").setValue("dawama").setEmoji("🎡"), // 🔴 إضافة اللعبة للقائمة
+        new StringSelectMenuOptionBuilder().setLabel("كلمة السر").setValue("password").setEmoji("🔒") // 🔴 إضافة لعبة كلمة المرور
       )
   );
 
