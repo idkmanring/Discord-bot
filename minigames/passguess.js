@@ -62,7 +62,7 @@ async function buildBoardImage(playerState, targetName, isOffline) {
   ctx.shadowColor = "rgba(0, 0, 0, 0.8)";
   ctx.shadowBlur = 10;
   ctx.font = "bold 50px Cairo";
-  ctx.fillText(`🎯 الهدف: كسر رقم ${targetName}`, width / 2, 60);
+  ctx.fillText(`الهدف: كسر رقم ${targetName}`, width / 2, 60);
   ctx.shadowBlur = 0; // إيقاف الظل لباقي العناصر
 
   const boxS = 85; // مربعات ضخمة وعريضة
@@ -160,7 +160,7 @@ async function renderGameState(channel, game, customMsg = null) {
   const imgBuffer = await buildBoardImage(currentPlayer, targetName, game.isOffline);
   const attachment = new AttachmentBuilder(imgBuffer, { name: "password.png" });
 
-  let content = customMsg || `🔐 **كسر الأرقام** | الدور على: <@${currentPlayer.id}>\nالهدف الحالي: كسر رقم **${targetName}**!\nاكتب بالشات **4 أرقام** للتوقع (لديك 60 ثانية).`;
+  let content = customMsg || ` **كسر الأرقام** | الدور على: <@${currentPlayer.id}>\nالهدف الحالي: كسر رقم **${targetName}**!\nاكتب بالشات **4 أرقام** للتوقع (لديك 60 ثانية).`;
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`pg_quit_${game.id}`).setLabel("انسحاب").setStyle(ButtonStyle.Danger)
@@ -182,7 +182,7 @@ async function renderGameState(channel, game, customMsg = null) {
   if (game.timer) clearTimeout(game.timer);
   game.timer = setTimeout(async () => {
     if (activeGames.has(channel.id) && game.turnIndex === game.alivePlayers.indexOf(currentPlayer)) {
-      channel.send(`⏳ انتهى الوقت! طار الدور عن <@${currentPlayer.id}>.`).then(m=>setTimeout(()=>m.delete().catch(()=>{}), 4000));
+      channel.send(` انتهى الوقت! طار الدور عن <@${currentPlayer.id}>.`).then(m=>setTimeout(()=>m.delete().catch(()=>{}), 4000));
       nextTurn(game);
       await renderGameState(channel, game);
     }
@@ -207,14 +207,14 @@ module.exports.startPasswordLobby = async function(interaction) {
 
 async function updateLobbyMessage(interaction, lobby, isFirst = false) {
   const embed = new EmbedBuilder()
-    .setTitle("🔐 لوبي كسر الأرقام")
+    .setTitle("لوبي كلمة السر")
     .setColor("#38BDF8")
     .setDescription(`الوضع الحالي: **${lobby.mode === "solo" ? "سولو (لاعب ضد البوت)" : "أونلاين (2 إلى 4 لاعبين)"}**`)
     .addFields({ name: `اللاعبين (${lobby.players.size})`, value: Array.from(lobby.players.keys()).map(id => `<@${id}>`).join("\n") });
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`pgl_start_${lobby.id}`).setLabel("ابدأ اللعبة").setStyle(ButtonStyle.Success).setEmoji("🚀"),
-    new ButtonBuilder().setCustomId(`pgl_toggle_${lobby.id}`).setLabel(lobby.mode === "solo" ? "تحويل إلى أونلاين" : "تحويل إلى سولو").setStyle(ButtonStyle.Primary).setEmoji("🔄"),
+    new ButtonBuilder().setCustomId(`pgl_start_${lobby.id}`).setLabel("ابدأ اللعبة").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`pgl_toggle_${lobby.id}`).setLabel(lobby.mode === "solo" ? "اونلاين" : "سولو").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`pgl_cancel_${lobby.id}`).setLabel("إلغاء").setStyle(ButtonStyle.Danger)
   );
 
@@ -272,7 +272,7 @@ module.exports.handleLobbyButtons = async function(i) {
 
     if (lobby.mode === "solo") {
       activeLobbies.delete(i.channelId);
-      await i.update({ content: "⏳ جاري إعداد اللوحة...", embeds: [], components: [] });
+      await i.update({ content: "جاري إعداد اللوحة...", embeds: [], components: [] });
       startPasswordGame(i.channel, lobby);
     } else {
       lobby.phase = "prep";
@@ -284,7 +284,7 @@ module.exports.handleLobbyButtons = async function(i) {
 // --- طور التجهيز للأونلاين ---
 async function updatePrepMessage(interaction, lobby) {
   const embed = new EmbedBuilder()
-    .setTitle("🔐 التجهيز السري (أونلاين)")
+    .setTitle(" التجهيز السري (أونلاين)")
     .setColor("#FBBF24")
     .setDescription("كل لاعب يضغط الزر لاختيار 4 أرقام، ثم يضغط جاهز!");
 
@@ -295,9 +295,9 @@ async function updatePrepMessage(interaction, lobby) {
   embed.addFields({ name: "حالة اللاعبين", value: playersStatus });
 
   const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`pgp_setpass_${lobby.id}`).setLabel("اختيار الأرقام").setStyle(ButtonStyle.Primary).setEmoji("⌨️"),
-    new ButtonBuilder().setCustomId(`pgp_ready_${lobby.id}`).setLabel("جاهز").setStyle(ButtonStyle.Success).setEmoji("✅"),
-    new ButtonBuilder().setCustomId(`pgp_cancel_${lobby.id}`).setLabel("إلغاء اللعبة").setStyle(ButtonStyle.Danger)
+    new ButtonBuilder().setCustomId(`pgp_setpass_${lobby.id}`).setLabel("اختار كلمة السر").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`pgp_ready_${lobby.id}`).setLabel("جاهز").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`pgp_cancel_${lobby.id}`).setLabel("إلغاء").setStyle(ButtonStyle.Danger)
   );
 
   if (interaction.isButton()) {
@@ -351,7 +351,7 @@ module.exports.handlePrepButtons = async function(i) {
 
     if (allReady) {
       activeLobbies.delete(i.channelId);
-      await i.update({ content: "🚀 الكل جاهز! اللعبة بتبدأ الآن...", embeds: [], components: [] });
+      await i.update({ content: " الكل جاهز! اللعبة بتبدأ الآن...", embeds: [], components: [] });
       startPasswordGame(i.channel, lobby);
     } else {
       await updatePrepMessage(i, lobby);
