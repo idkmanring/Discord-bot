@@ -62,6 +62,13 @@ GlobalFonts.registerFromPath(
   path.join(__dirname, "assets/fonts/PressStart2P.ttf"),
   "PressStart2P"
 );
+
+GlobalFonts.registerFromPath(
+  path.join(__dirname, "assets/fonts/mandisa.ttf"),
+  "mandisa"
+);
+
+
 global.assets = {};
 async function preloadAssets() {
   assets.base = await loadImage(path.join(__dirname, "assets/templates/BUCKSHOT.png"));
@@ -169,6 +176,7 @@ function drawCircularImage(ctx, img, x, y, size) {
 /******************************************
  * 2)         الاتصال بـ MongoDB          *
  ******************************************/
+const startNewspaperJob = require('./newspaper.js');
 const mongoUrl = "mongodb+srv://Bots:Tl51R0bnMe1O4OeX@discordbot.gyvpxdk.mongodb.net/DiscordBots?retryWrites=true&w=majority&appName=DiscordBot";
 const mongoClient = new MongoClient(mongoUrl);
 let db;
@@ -181,6 +189,17 @@ async function connectToMongo() {
 
     // ✨ تم إضافة نظام المراقبة هنا ✨
     require('./events/activityTracker')(client, db);
+    
+    // ✨ تشغيل نظام الجريدة (الحل السحري لمشكلة السباق) ✨
+    if (client.isReady()) {
+        startNewspaperJob(client, db);
+        console.log("📰 محرك جريدة السيرفر متصل ويعمل بنجاح!");
+    } else {
+        client.once('ready', () => {
+            startNewspaperJob(client, db);
+            console.log("📰 محرك جريدة السيرفر متصل ويعمل بنجاح!");
+        });
+    }
 
   } catch (err) {
     console.error(" MongoDB Connection Error:", err);
@@ -194,7 +213,6 @@ mongoose.connect('mongodb+srv://Bots:Tl51R0bnMe1O4OeX@discordbot.gyvpxdk.mongodb
   .catch((err) => console.error('<:icons8wrong1001:1415979909825695914> Mongoose Connection Error:', err));
 
 client.login(process.env.DISCORD_TOKEN);
-
 
 // ===== Router عام للتفاعلات والاوامر + الرسائل =====
 function createUIRouter(client) {
