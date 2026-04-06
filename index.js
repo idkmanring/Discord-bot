@@ -6764,13 +6764,13 @@ async function handleWalletMessage(msg) {
     try {
       const soloDoc = await db.collection("solostats").findOne({ userId: String(userId) });
       
-      // الدخول لبياناتك الصحيحة اللي أرسلت صورتها
+      // الدخول لبياناتك الصحيحة 
       if (soloDoc && soloDoc.stats) {
         for (const [gameId, data] of Object.entries(soloDoc.stats)) {
           if (isExcludedGame(gameId)) continue;
 
           const wins = Number(data.wins || 0);
-          const loses = Number(data.loses || 0); // هذي الكلمة كانت تسبب المشكلة بالنسخ القديمة
+          const loses = Number(data.loses || 0); 
           const net = Number(data.net || 0);
           
           const displayName = typeof getArabicGameName === 'function' ? getArabicGameName(gameId) : cleanTextSafe(gameId);
@@ -6821,7 +6821,7 @@ async function handleWalletMessage(msg) {
     } catch (e) {}
 
     // ==========================================
-    // 🎨 الرسم (تخطيط شفاف ومثالي)
+    // 🎨 الرسم (تخطيط شفاف ومثالي بخطوط أكبر)
     // ==========================================
     const canvas = createCanvas(1920, 1080);
     const ctx = canvas.getContext("2d");
@@ -6841,10 +6841,11 @@ async function handleWalletMessage(msg) {
     }
 
     const COLOR_TEXT = "#F8FAFC";
-    const COLOR_SUBTEXT = "#94A3B8";
+    const COLOR_SUBTEXT = "#b698ce";
     const COLOR_ACCENT = "#FF8C00";
     const COLOR_WIN = "#22C55E";
     const COLOR_LOSS = "#EF4444";
+    const COLOR_PURPLE = "#C084FC"; // اللون البنفسجي الفاتح الجديد
 
     drawPanel(50, 50, 1820, 230);   
     drawPanel(990, 320, 880, 700);  
@@ -6862,105 +6863,123 @@ async function handleWalletMessage(msg) {
 
     ctx.beginPath();
     ctx.arc(1740, 165, 85, 0, Math.PI * 2, true);
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = COLOR_ACCENT;
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = COLOR_PURPLE; // الإطار صار بنفسجي
     ctx.stroke();
 
     // --- اليوزر نيم واللفل ---
     ctx.fillStyle = COLOR_TEXT;
-    ctx.font = "bold 55px Tahoma, sans-serif";
+    ctx.font = "bold 75px Tahoma, sans-serif"; // تكبير اليوزر نيم
     ctx.textAlign = "right";
     ctx.fillText(cleanUsername, 1620, 140);
 
-    ctx.fillStyle = COLOR_ACCENT;
-    ctx.font = "bold 35px Tahoma, sans-serif";
-    ctx.fillText(`المستوى ${currentLevel}`, 1620, 190);
+    ctx.fillStyle = COLOR_PURPLE; // تم التغيير للبنفسجي
+    ctx.font = "bold 45px Tahoma, sans-serif"; // تكبير اللفل
+    ctx.fillText(`المستوى ${currentLevel}`, 1620, 200);
 
-    // --- شريط XP الدقيق ---
+    // --- شريط XP الدقيق مع الإطار الخارجي ---
+    const xpBarX = 1220;
+    const xpBarY = 220;
+    const xpBarW = 400;
+    const xpBarH = 18; // الشريط صار أسمك شوي
+    const xpRadius = 9;
+
+    // خلفية الشريط
     ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
     ctx.beginPath();
-    ctx.roundRect ? ctx.roundRect(1220, 210, 400, 12, 6) : ctx.fillRect(1220, 210, 400, 12);
+    ctx.roundRect ? ctx.roundRect(xpBarX, xpBarY, xpBarW, xpBarH, xpRadius) : ctx.fillRect(xpBarX, xpBarY, xpBarW, xpBarH);
     ctx.fill();
+
+    // الإطار الخارجي (Border) لشريط الإكس بي
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = COLOR_PURPLE;
+    ctx.stroke();
     
-    ctx.fillStyle = COLOR_ACCENT;
-    const xpBarWidth = 400 * xpProgress;
+    // تعبئة التقدم (باللون البنفسجي)
+    ctx.fillStyle = COLOR_PURPLE;
+    const xpBarWidth = xpBarW * xpProgress;
     if (xpBarWidth > 0) {
       ctx.beginPath();
-      ctx.roundRect ? ctx.roundRect(1620 - xpBarWidth, 210, xpBarWidth, 12, 6) : ctx.fillRect(1620 - xpBarWidth, 210, xpBarWidth, 12);
+      ctx.roundRect ? ctx.roundRect(1620 - xpBarWidth, xpBarY, xpBarWidth, xpBarH, xpRadius) : ctx.fillRect(1620 - xpBarWidth, xpBarY, xpBarWidth, xpBarH);
       ctx.fill();
     }
 
-    ctx.fillStyle = COLOR_SUBTEXT;
-    ctx.font = "20px Tahoma, sans-serif";
+    ctx.fillStyle = COLOR_PURPLE;
+    ctx.font = "bold 24px Tahoma, sans-serif"; // تكبير أرقام الـ XP
     ctx.textAlign = "right";
-    ctx.fillText(`${totalXP} / ${nextLevelBaseXP} XP`, 1620, 250);
+    ctx.fillText(`${totalXP} / ${nextLevelBaseXP} XP`, 1620, 265);
 
     // --- الرصيد ---
     ctx.textAlign = "left";
     ctx.fillStyle = COLOR_SUBTEXT;
-    ctx.font = "bold 30px Tahoma, sans-serif";
+    ctx.font = "bold 38px Tahoma, sans-serif"; // تكبير خط العنوان
     ctx.fillText("الرصيد الحالي", 90, 130);
     
     ctx.fillStyle = COLOR_TEXT; 
-    ctx.font = "bold 75px Tahoma, sans-serif";
-    ctx.fillText(`${balance.toLocaleString("en-US")}`, 90, 210);
+    ctx.font = "bold 85px Tahoma, sans-serif"; // تكبير رقم الرصيد بشكل فخم
+    ctx.fillText(`${balance.toLocaleString("en-US")}`, 90, 215);
 
-    // --- إحصائيات اللاعب ---
+// --- إحصائياتك (يمين الشاشة) ---
     ctx.textAlign = "right";
     ctx.fillStyle = COLOR_TEXT;
-    ctx.font = "bold 45px Tahoma, sans-serif";
-    ctx.fillText("إحصائيات اللاعب", 1820, 400);
+    ctx.font = "bold 55px Tahoma, sans-serif"; 
+    ctx.fillText("إحصائياتك", 1820, 390); // رفعت العنوان شوي عشان نعطي مساحة للمربعات تحت
 
-    const statsRight = [
-      { label: "إجمالي الرسائل", value: msgsCount.toLocaleString() },
-      { label: "ساعات الصوت", value: (voiceMinutes / 60).toFixed(1) },
+const statsRight = [
+      { label: "إجمالي الرسائل", value: `\u200F${msgsCount.toLocaleString()} رسالة` },
+      { label: "ساعات الصوت", value: `\u200F${(voiceMinutes / 60).toFixed(1)} ساعة` },
       { label: "أكثر روم نشاطاً", value: favChannel },
       { label: "أكثر يوم نشاطاً", value: activeDay },
-      { label: "أكبر فوز", value: `${biggestWin.toLocaleString()}`, color: COLOR_WIN },
-      { label: "أكبر خسارة", value: `${biggestLoss.toLocaleString()}`, color: COLOR_LOSS },
+      { label: "أكبر فوز", value: `\u200F${biggestWin.toLocaleString()}`, color: COLOR_WIN },
+      { label: "أكبر خسارة", value: `\u200F${biggestLoss.toLocaleString()}`, color: COLOR_LOSS },
       { label: "أكثر لعبة ربحاً", value: mostWonGame },
       { label: "أكثر لعبة خسارة", value: mostLostGame }
     ];
 
-    let startY = 480;
+    let currentLineY = 440; // حددنا موقع أول خط فاصل بالضبط
     statsRight.forEach(stat => {
+      // 1. رسم الخط الفاصل
       ctx.beginPath();
-      ctx.moveTo(1830, startY - 35);
-      ctx.lineTo(1030, startY - 35);
+      ctx.moveTo(1830, currentLineY);
+      ctx.lineTo(1030, currentLineY);
       ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
       ctx.lineWidth = 2;
       ctx.stroke();
 
+      // 2. تحديد موقع النص (ننزل 48 بيكسل تحت الخط عشان تتوسط الكلمة المسافة بالضبط)
+      let textY = currentLineY + 48;
+
       ctx.textAlign = "right";
       ctx.fillStyle = COLOR_SUBTEXT;
-      ctx.font = "30px Tahoma, sans-serif";
-      ctx.fillText(stat.label, 1830, startY);
+      ctx.font = "38px Tahoma, sans-serif"; 
+      ctx.fillText(stat.label, 1830, textY);
       
       ctx.textAlign = "left";
       ctx.fillStyle = stat.color || COLOR_TEXT;
-      ctx.font = "bold 35px Tahoma, sans-serif";
-      ctx.fillText(stat.value, 1030, startY); 
+      ctx.font = "bold 38px Tahoma, sans-serif"; 
+      ctx.fillText(stat.value, 1030, textY); 
       
-      startY += 65;
+      // 3. المسافة للسطر اللي بعده (صارت 70 بدال 75 عشان الكلمة الأخيرة ما تطلع برا المربع)
+      currentLineY += 70; 
     });
 
-    // --- أداء الألعاب ---
+    // --- أدائك (يسار الشاشة) ---
     ctx.textAlign = "right";
     ctx.fillStyle = COLOR_TEXT;
-    ctx.font = "bold 45px Tahoma, sans-serif";
-    ctx.fillText("أداء الألعاب (نسبة الفوز)", 890, 400);
+    ctx.font = "bold 55px Tahoma, sans-serif"; // تكبير العنوان وتغييره
+    ctx.fillText("أدائك", 890, 400);
 
     const activeGames = txStats.filter(g => (g.winCount + g.lossCount) > 0);
     const gameBars = activeGames.sort((a, b) => (b.winCount + b.lossCount) - (a.winCount + a.lossCount)).slice(0, 5); 
     
-    let barY = 480;
+    let barY = 485;
     const barX = 90; 
     const maxBarWidth = 800;
 
     if (gameBars.length === 0) {
       ctx.textAlign = "center";
       ctx.fillStyle = COLOR_SUBTEXT;
-      ctx.font = "35px Tahoma, sans-serif";
+      ctx.font = "40px Tahoma, sans-serif";
       ctx.fillText("لم تقم بتجربة أي لعبة بعد.", 490, 600);
     } else {
       gameBars.forEach(game => {
@@ -6968,19 +6987,27 @@ async function handleWalletMessage(msg) {
         const winRate = totalGames > 0 ? (game.winCount / totalGames) : 0;
         const winPercentStr = Math.round(winRate * 100) + "%";
 
+        // رسم اسم اللعبة
         ctx.textAlign = "right";
         ctx.fillStyle = COLOR_TEXT;
-        ctx.font = "bold 35px Tahoma, sans-serif";
+        ctx.font = "bold 42px Tahoma, sans-serif"; // تكبير اسم اللعبة
         ctx.fillText(game._id, 890, barY); 
         
+        // رسم النسبة المئوية (يمين) والإحصائيات جنبها بتناسق تام
         ctx.textAlign = "left";
-        ctx.fillStyle = COLOR_SUBTEXT;
-        ctx.font = "25px Tahoma, sans-serif";
-        ctx.fillText(`فوز: ${game.winCount} | خسارة: ${game.lossCount}`, barX, barY); 
-
         ctx.fillStyle = winRate >= 0.5 ? COLOR_WIN : COLOR_LOSS;
-        ctx.fillText(`(${winPercentStr})`, barX + 220, barY);
+        ctx.font = "bold 32px Tahoma, sans-serif"; // تكبير النسبة المئوية
+        const pctText = `(${winPercentStr})`;
+        ctx.fillText(pctText, barX, barY); 
 
+        // قياس العرض تلقائياً لوضع الإحصائيات جنبه مباشرة
+        const pctWidth = ctx.measureText(pctText).width;
+
+        ctx.fillStyle = COLOR_SUBTEXT;
+        ctx.font = "28px Tahoma, sans-serif"; // تكبير الإحصائيات
+        ctx.fillText(`   فوز: ${game.winCount} | خسارة: ${game.lossCount}`, barX + pctWidth, barY); 
+
+        // الشريط الرمادي في الخلف
         ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
         ctx.beginPath();
         ctx.roundRect ? ctx.roundRect(barX, barY + 20, maxBarWidth, 20, 4) : ctx.fillRect(barX, barY + 20, maxBarWidth, 20);
@@ -6998,7 +7025,7 @@ async function handleWalletMessage(msg) {
           ctx.fill();
         }
 
-        barY += 105;
+        barY += 115; // زيادة المسافة العمودية بين الألعاب لتناسب الخطوط الكبيرة
       });
     }
 
