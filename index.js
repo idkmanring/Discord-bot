@@ -6813,30 +6813,34 @@ async function handleWalletMessage(msg) {
       }
     } catch (e) {}
 
-    // 5. سحب أكثر روم ويوم من قوقل شيت
+    // 5. سحب أكثر روم ويوم من قوقل شيت (النسخة المحسنة اللي تسحب الجاهز)
     let favChannel = "لا يوجد", activeDay = "لا يوجد";
     try {
       if (process.env.SHEET_ID) {
         const auth = new JWT({ email: process.env.SHEET_CLIENT_EMAIL, key: process.env.SHEET_PRIVATE_KEY.replace(/\\n/g, '\n'), scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
         const doc = new GoogleSpreadsheet(process.env.SHEET_ID, auth);
         await doc.loadInfo();
-        const sheet = doc.sheetsByTitle['Messages'];
+        
+        // تنبيه: تأكد إن هذا هو اسم الصفحة اللي فيها الجدول المجهز
+        const sheet = doc.sheetsByTitle['Messages']; 
+        
         if (sheet) {
-          const rows = await sheet.getRows({ limit: 1000, offset: Math.max(0, sheet.rowCount - 1000) }); 
-          const channels = {}, days = {};
-          rows.forEach(r => {
-            if (r.get('user_id') === userId) {
-              const cName = r.get('channel_name');
-              const dateStr = r.get('timestamp') ? r.get('timestamp').split("T")[0] : null;
-              if (cName) channels[cName] = (channels[cName] || 0) + 1;
-              if (dateStr) days[dateStr] = (days[dateStr] || 0) + 1;
-            }
-          });
-          if (Object.keys(channels).length > 0) favChannel = cleanTextSafe(Object.keys(channels).reduce((a, b) => channels[a] > channels[b] ? a : b));
-          if (Object.keys(days).length > 0) activeDay = Object.keys(days).reduce((a, b) => days[a] > days[b] ? a : b);
+          // جلب الصفوف (بدون ليميت عشان يجيب كل اللاعبين من جدول الملخص)
+          const rows = await sheet.getRows(); 
+          
+          // البحث المباشر عن الآي دي في العمود الأول
+          const userRow = rows.find(r => r.get('user_id_stats') === String(userId));
+          
+          if (userRow) {
+            // سحب البيانات الجاهزة من الأعمدة مباشرة
+            favChannel = cleanTextSafe(userRow.get('top_channel')) || "لا يوجد";
+            activeDay = cleanTextSafe(userRow.get('most_active_day')) || "لا يوجد";
+          }
         }
       }
-    } catch (e) {}
+    } catch (e) {
+        console.error("خطأ في قراءة ملف الشيت:", e);
+    }
 
     // ==========================================
     // 🎨 الرسم (تخطيط شفاف ومثالي بخطوط أكبر)
