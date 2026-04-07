@@ -405,7 +405,7 @@ module.exports = function startNewspaperJob(client, db) {
 
             // 🛑 2. التحقق من التغيير
             const currentStateHash = `${richest?.userId}-${top5[0]?.id}-${drama?._id}-${event?._id}`;
-            // if (currentStateHash === lastStateHash) return; // 🛑 معطل للتجربة الدائمة
+             if (currentStateHash === lastStateHash) return; // 🛑 معطل للتجربة الدائمة
             lastStateHash = currentStateHash;
 
             // 🎨 3. رسم الجريدة
