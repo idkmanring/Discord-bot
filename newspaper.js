@@ -4,7 +4,7 @@ const path = require('path');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // ⚙️ إعدادات الجريدة
-const NEWSPAPER_CHANNEL_ID = "1418474888989245572";
+const NEWSPAPER_CHANNEL_ID = "1492329544919810088";
 const TEMPLATE_IMAGE_PATH = path.join(__dirname, "IMG_3786.jpg"); 
 const CHECK_INTERVAL = 15 * 60 * 1000; // للتجربة كل 10 ثواني (رجعها 5 * 60 * 1000 لاحقاً)
 
