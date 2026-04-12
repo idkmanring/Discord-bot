@@ -20,11 +20,7 @@ module.exports = async function handleMinigamesCommand(message) {
         new StringSelectMenuOptionBuilder().setLabel(" فاميلي فيود").setValue("feud").setEmoji("👨‍👩‍👧‍👦"),
         new StringSelectMenuOptionBuilder().setLabel("الدوامة").setValue("dawama").setEmoji("🎡"),
         new StringSelectMenuOptionBuilder().setLabel("كلمة السر").setValue("password").setEmoji("🔒"),
-        new StringSelectMenuOptionBuilder()
-          .setLabel("الإمبوستر ")
-          .setValue("imposter")
-          .setEmoji("🕵️‍♂️")
-      )
+        new StringSelectMenuOptionBuilder().setLabel("الإمبوستر ").setValue("imposter").setEmoji("🕵️‍♂️"))
   );
 
   const statsButton = new ActionRowBuilder().addComponents(
