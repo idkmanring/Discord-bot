@@ -13,14 +13,17 @@ module.exports = async function handleMinigamesCommand(message) {
         new StringSelectMenuOptionBuilder().setLabel(" ركّب").setValue("rakkib").setEmoji("1416010651834257409"),
         new StringSelectMenuOptionBuilder().setLabel("اعلام دول").setValue("flags_country").setEmoji("1416010643248517162"),
         new StringSelectMenuOptionBuilder().setLabel("عواصم دول").setValue("flags_capital").setEmoji("1416010657689763912"),
-        // الألعاب الجديدة هنا 👇
         new StringSelectMenuOptionBuilder().setLabel(" حرف").setValue("harf").setEmoji("1416507901425614948"),
         new StringSelectMenuOptionBuilder().setLabel("حروف").setValue("wordle").setEmoji("📝"),
-       // new StringSelectMenuOptionBuilder().setLabel(" تحدي الصور").setValue("pic_challenge").setEmoji("🖼️"),
-       // new StringSelectMenuOptionBuilder().setLabel(" سلسلة الكلمات").setValue("chained_words").setEmoji("🔗"),
+        // new StringSelectMenuOptionBuilder().setLabel(" تحدي الصور").setValue("pic_challenge").setEmoji("🖼️"),
+        // new StringSelectMenuOptionBuilder().setLabel(" سلسلة الكلمات").setValue("chained_words").setEmoji("🔗"),
         new StringSelectMenuOptionBuilder().setLabel(" فاميلي فيود").setValue("feud").setEmoji("👨‍👩‍👧‍👦"),
-        new StringSelectMenuOptionBuilder().setLabel("الدوامة").setValue("dawama").setEmoji("🎡"), // 🔴 إضافة اللعبة للقائمة
-        new StringSelectMenuOptionBuilder().setLabel("كلمة السر").setValue("password").setEmoji("🔒") // 🔴 إضافة لعبة كلمة المرور
+        new StringSelectMenuOptionBuilder().setLabel("الدوامة").setValue("dawama").setEmoji("🎡"),
+        new StringSelectMenuOptionBuilder().setLabel("كلمة السر").setValue("password").setEmoji("🔒"),
+        new StringSelectMenuOptionBuilder()
+          .setLabel("الإمبوستر ")
+          .setValue("imposter")
+          .setEmoji("🕵️‍♂️")
       )
   );
 
