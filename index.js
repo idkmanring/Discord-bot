@@ -545,6 +545,21 @@ ui.messageFilter(
   },
   (m) => passGameModule.handleMessages(m, db)
 );
+
+const imposterModule = require("./minigames/imposter");
+
+// أزرار لوبي الإمبوستر
+ui.buttonPrefix("impl_", (i) => imposterModule.handleLobbyButtons(i, db));
+
+// أزرار الأطوار (إجابة وتجهيز)
+ui.buttonPrefix("impg_", (i) => imposterModule.handleGameButtons(i));
+
+// أزرار التصويت النهائي
+ui.buttonPrefix("impv_", (i) => imposterModule.handleVotingButtons(i));
+
+// المودال الخاص بالإجابة
+ui.modalPrefix("imp_modal_ans_", (i) => imposterModule.handleModal(i));
+
 /******************************************
  * 🔌 ربط تريفيا مع الراوتر
  ******************************************/
