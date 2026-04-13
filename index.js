@@ -189,17 +189,6 @@ async function connectToMongo() {
 
     // ✨ تم إضافة نظام المراقبة هنا ✨
     require('./events/activityTracker')(client, db);
-    
-    // ✨ تشغيل نظام الجريدة (الحل السحري لمشكلة السباق) ✨
-    if (client.isReady()) {
-        startNewspaperJob(client, db);
-        console.log("📰 محرك جريدة السيرفر متصل ويعمل بنجاح!");
-    } else {
-        client.once('ready', () => {
-            startNewspaperJob(client, db);
-            console.log("📰 محرك جريدة السيرفر متصل ويعمل بنجاح!");
-        });
-    }
 
   } catch (err) {
     console.error(" MongoDB Connection Error:", err);
@@ -207,6 +196,7 @@ async function connectToMongo() {
 }
 // استدعاء الدالة مرة وحدة فقط
 connectToMongo();
+
 
 mongoose.connect('mongodb+srv://Bots:Tl51R0bnMe1O4OeX@discordbot.gyvpxdk.mongodb.net/DiscordBots?retryWrites=true&w=majority&appName=DiscordBot')
   .then(() => console.log('<:icons8correct1002:1415979896433278986> Mongoose Connected!'))
