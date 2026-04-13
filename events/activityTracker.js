@@ -91,15 +91,17 @@ module.exports = function mountTracker(client, db) {
         });
       }
 
-      // ✨ 2. ترحيل الرسايل وثواني الصوت للمونقو (كولكشن user_activity) ✨
+      // ✨ 2. ترحيل الرسايل وثواني الصوت للمونقو (كولكشن user_activity) مع اليوزر نيم ✨
       const operations = [];
       for (const [userId, count] of messageCache.entries()) {
-        operations.push({ updateOne: { filter: { userId }, update: { $inc: { "textStats.validMessages": count } }, upsert: true } });
+        const username = client.users.cache.get(userId)?.username || "غير معروف";
+        operations.push({ updateOne: { filter: { userId }, update: { $inc: { "textStats.validMessages": count }, $set: { username } }, upsert: true } });
       }
       messageCache.clear();
 
       for (const [userId, seconds] of voiceCache.entries()) {
-        operations.push({ updateOne: { filter: { userId }, update: { $inc: { "voiceStats.totalSeconds": seconds } }, upsert: true } });
+        const username = client.users.cache.get(userId)?.username || "غير معروف";
+        operations.push({ updateOne: { filter: { userId }, update: { $inc: { "voiceStats.totalSeconds": seconds }, $set: { username } }, upsert: true } });
       }
       voiceCache.clear();
 
@@ -267,8 +269,8 @@ module.exports = function mountTracker(client, db) {
     if (msg.author?.bot || msg.guild?.id !== SERVER_ID) return;
     sheetBuffers.Messages.push({ timestamp: getTimestamp(), channel_id: msg.channel.id, user_id: msg.author.id, message_id: msg.id, action: "deleted" });
     
-    // ✨ تسجيل الحذف في المونقو ✨
-    await activityCollection.updateOne({ userId: msg.author.id }, { $inc: { "textStats.deletedMessages": 1 } }, { upsert: true });
+    // ✨ تسجيل الحذف في المونقو مع إضافة اليوزر نيم ✨
+    await activityCollection.updateOne({ userId: msg.author.id }, { $inc: { "textStats.deletedMessages": 1 }, $set: { username: msg.author.username } }, { upsert: true });
   });
 
   // ==========================================
@@ -277,13 +279,14 @@ module.exports = function mountTracker(client, db) {
   client.on("voiceStateUpdate", async (oldState, newState) => {
     if (newState.guild.id !== SERVER_ID || newState.member?.user.bot) return;
     const userId = newState.member.id;
+    const username = newState.member.user.username; // جبنا الاسم هنا
 
     // ✨ الميوت والديفن للمونقو ✨
     let incData = {};
     if (!oldState.mute && newState.mute) incData["voiceStats.mutes"] = 1;
     if (!oldState.deaf && newState.deaf) incData["voiceStats.deafens"] = 1;
     if (Object.keys(incData).length > 0) {
-      await activityCollection.updateOne({ userId }, { $inc: incData }, { upsert: true });
+      await activityCollection.updateOne({ userId }, { $inc: incData, $set: { username } }, { upsert: true });
     }
 
     if (!oldState.mute && newState.mute) sheetBuffers.Voice.push({ timestamp: getTimestamp(), user_id: userId, action: "muted" });
@@ -357,15 +360,15 @@ module.exports = function mountTracker(client, db) {
   client.on("guildMemberAdd", async member => {
     if (member.guild.id !== SERVER_ID) return;
     sheetBuffers.Events.push({ timestamp: getTimestamp(), event_type: "server_join", user_id: member.id });
-    // ✨ دخول السيرفر للمونقو ✨
-    await activityCollection.updateOne({ userId: member.id }, { $push: { "history.joins": new Date() } }, { upsert: true });
+    // ✨ دخول السيرفر للمونقو مع إضافة اليوزر نيم ✨
+    await activityCollection.updateOne({ userId: member.id }, { $push: { "history.joins": new Date() }, $set: { username: member.user.username } }, { upsert: true });
   });
 
   client.on("guildMemberRemove", async member => {
     if (member.guild.id !== SERVER_ID) return;
     sheetBuffers.Events.push({ timestamp: getTimestamp(), event_type: "server_leave", user_id: member.id });
-    // ✨ خروج السيرفر للمونقو ✨
-    await activityCollection.updateOne({ userId: member.id }, { $push: { "history.leaves": new Date() } }, { upsert: true });
+    // ✨ خروج السيرفر للمونقو مع إضافة اليوزر نيم ✨
+    await activityCollection.updateOne({ userId: member.id }, { $push: { "history.leaves": new Date() }, $set: { username: member.user.username } }, { upsert: true });
 
     try {
       await new Promise(r => setTimeout(r, 4000));
@@ -386,11 +389,12 @@ module.exports = function mountTracker(client, db) {
   client.on("guildMemberUpdate", async (oldMember, newMember) => {
     if (newMember.guild.id !== SERVER_ID) return;
     const userId = newMember.id;
+    const username = newMember.user.username;
 
     // ✨ التايم آوت ✨
     if (!oldMember.isCommunicationDisabled() && newMember.isCommunicationDisabled()) {
       sheetBuffers.Moderation.push({ timestamp: getTimestamp(), user_id: userId, action_type: "timeout" });
-      await activityCollection.updateOne({ userId }, { $inc: { "punishments.timeouts": 1 } }, { upsert: true });
+      await activityCollection.updateOne({ userId }, { $inc: { "punishments.timeouts": 1 }, $set: { username } }, { upsert: true });
       await eventsCollection.insertOne({ type: "timeout", userId, timestamp: new Date() });
     }
 
@@ -398,9 +402,9 @@ module.exports = function mountTracker(client, db) {
     const oldRoles = oldMember.roles.cache;
     const newRoles = newMember.roles.cache;
     if (oldRoles.size < newRoles.size) {
-      await activityCollection.updateOne({ userId }, { $inc: { "history.rolesAdded": 1 } }, { upsert: true });
+      await activityCollection.updateOne({ userId }, { $inc: { "history.rolesAdded": 1 }, $set: { username } }, { upsert: true });
     } else if (oldRoles.size > newRoles.size) {
-      await activityCollection.updateOne({ userId }, { $inc: { "history.rolesRemoved": 1 } }, { upsert: true });
+      await activityCollection.updateOne({ userId }, { $inc: { "history.rolesRemoved": 1 }, $set: { username } }, { upsert: true });
     }
 
     // ✨ تغيير الاسم ✨
