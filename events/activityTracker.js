@@ -72,14 +72,21 @@ module.exports = function mountTracker(client, db) {
     try {
       const guild = client.guilds.cache.get(SERVER_ID);
       
-      // ✨ 1. حساب ثواني الصوت للمونقو ✨
+      // ✨ 1. حساب ثواني الصوت للمونقو وقوقل شيت (لحظياً) ✨
       if (guild) {
         guild.channels.cache.filter(c => c.isVoiceBased()).forEach(channel => {
           if (channel.id === AFK_CHANNEL_ID) return;
           channel.members.forEach(member => {
             if (member.user.bot) return;
+            
+            // تحديث كاش المونقو
             const currentVoice = voiceCache.get(member.id) || 0;
             voiceCache.set(member.id, currentVoice + 60);
+
+            // تحديث إحصائيات الشيت اللحظية عشان ما يطلع 0
+            const stats = userActivityStats.get(member.id) || { username: member.user.username, msgs: 0, chars: 0, voiceSecs: 0, reactions: 0 };
+            stats.voiceSecs += 60;
+            userActivityStats.set(member.id, stats);
           });
         });
       }
@@ -98,7 +105,7 @@ module.exports = function mountTracker(client, db) {
 
       if (operations.length > 0) await activityCollection.bulkWrite(operations);
 
-      // 📊 3. تفريغ بيانات جوجل شيت
+      // 📊 3. تفريغ بيانات جوجل شيت بحماية إضافية
       if (googleDoc) {
         for (const [sheetName, rows] of Object.entries(sheetBuffers)) {
           if (rows.length > 0) {
@@ -106,12 +113,18 @@ module.exports = function mountTracker(client, db) {
             if (sheet) {
               const rowsToSend = [...rows];
               sheetBuffers[sheetName] = []; 
-              await sheet.addRows(rowsToSend);
+              
+              sheet.addRows(rowsToSend).catch(err => {
+                console.error(`❌ خطأ في رفع بيانات شيت ${sheetName}:`, err.message);
+                sheetBuffers[sheetName].push(...rowsToSend); // نرجع البيانات عشان ما تضيع لو فصل الشيت
+              });
             }
           }
         }
       }
-    } catch (err) {}
+    } catch (err) {
+        console.error("❌ خطأ في حلقة التفريغ:", err);
+    }
   }, FLUSH_INTERVAL);
 
   // ==========================================
@@ -151,7 +164,8 @@ module.exports = function mountTracker(client, db) {
   // 🔄 3. ملخص نشاط المستخدمين العادي (كل ساعة)
   // ==========================================
   setInterval(() => {
-    for (const [userId, stats] of userHourlyStats.entries()) {
+    // تم تصحيح المتغير هنا لـ userActivityStats
+    for (const [userId, stats] of userActivityStats.entries()) {
       if (stats.msgs > 0 || stats.voiceSecs > 0 || stats.reactions > 0) {
         sheetBuffers.UserActivity.push({
           timestamp: getTimestamp(), user_id: userId, username: stats.username,
@@ -159,7 +173,7 @@ module.exports = function mountTracker(client, db) {
         });
       }
     }
-    userHourlyStats.clear();
+    userActivityStats.clear();
   }, SNAPSHOT_INTERVAL);
 
   // ==========================================
@@ -312,6 +326,12 @@ module.exports = function mountTracker(client, db) {
   // ==========================================
   client.on("messageReactionAdd", (reaction, user) => {
     if (user.bot || reaction.message.guild?.id !== SERVER_ID) return;
+    
+    // تحديث التفاعلات في الـ Activity Stats للشيت
+    const stats = userActivityStats.get(user.id) || { username: user.username, msgs: 0, chars: 0, voiceSecs: 0, reactions: 0 };
+    stats.reactions += 1;
+    userActivityStats.set(user.id, stats);
+
     sheetBuffers.Engagement.push({ timestamp: getTimestamp(), message_id: reaction.message.id, user_id: user.id, reaction_type: reaction.emoji.name, action: "add" });
   });
 
