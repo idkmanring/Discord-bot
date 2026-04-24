@@ -190,6 +190,10 @@ async function connectToMongo() {
     // ✨ تم إضافة نظام المراقبة هنا ✨
     require('./events/activityTracker')(client, db);
 
+    // ✨ تشغيل نظام الرتب هنا لضمان أن قاعدة البيانات اتصلت بنجاح ✨
+    const startLevelRolesCron = require('./levelManager.js');
+    startLevelRolesCron(client, db);
+
   } catch (err) {
     console.error(" MongoDB Connection Error:", err);
   }
@@ -549,6 +553,17 @@ ui.buttonPrefix("impv_", (i) => imposterModule.handleVotingButtons(i));
 
 // المودال الخاص بالإجابة
 ui.modalPrefix("imp_modal_ans_", (i) => imposterModule.handleModal(i));
+
+
+const { fork } = require('child_process');
+
+// تشغيل الصوت في معالج منفصل (لمنع التقطيع)
+const voiceProcess = fork(path.join(__dirname, 'voiceManager.js'));
+
+voiceProcess.on('error', (err) => {
+    console.error('خطأ في تشغيل بوتات الصوت:', err);
+});
+
 
 /******************************************
  * 🔌 ربط تريفيا مع الراوتر
