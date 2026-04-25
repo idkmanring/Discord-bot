@@ -25,7 +25,7 @@ const botsConfig = [
         statusType: ActivityType.Listening
     },
     { 
-        token: 'process.env.EARTH_TOKEN',
+        token: process.env.EARTH_TOKEN,
         guildId: '1182849389799149688', 
         channelId: '1182849390600273925', 
         folderName: 'earth', // مجلد الأرض (الخليجي)
@@ -33,7 +33,7 @@ const botsConfig = [
         statusType: ActivityType.Listening 
     },
     { 
-        token: 'process.env.JUPITER_TOKEN',
+        token: process.env.JUPITER_TOKEN,
         guildId: '1182849389799149688', 
         channelId: '1354263354298077255', 
         folderName: 'jupiter', // مجلد المشتري (الملحمي)
@@ -41,7 +41,7 @@ const botsConfig = [
         statusType: ActivityType.Listening 
     },
     { 
-        token: 'process.env.MARS_TOKEN',
+        token: process.env.MARS_TOKEN,
         guildId: '1182849389799149688', 
         channelId: '1182849390600273924', 
         folderName: 'mars', // مجلد المريخ (العراقي)
@@ -49,7 +49,7 @@ const botsConfig = [
         statusType: ActivityType.Listening
     },
     { 
-        token: 'process.env.SATURN_TOKEN',
+        token: process.env.SATURN_TOKEN,
         guildId: '1182849389799149688', 
         channelId: '1354263815793021019', 
         folderName: 'saturn', // مجلد زحل (اللو-فاي)
@@ -57,10 +57,10 @@ const botsConfig = [
         statusType: ActivityType.Listening
     },
     { 
-        token: 'process.env.NEPTUNE_TOKEN',
+        token: process.env.NEPTUNE_TOKEN,
         guildId: '1182849389799149688', 
         channelId: '1354263853298487499', 
-        folderName: 'neptune', // مجلد نبتون (الفضاء والأعماق)
+        folderName: 'uranus', // مجلد نبتون (الفضاء والأعماق)
         statusText: 'Deep Space Ambient', 
         statusType: ActivityType.Listening 
     }

@@ -6718,26 +6718,21 @@ function drawSmartBoxText(ctx, linesArray, box, color = "#3eb8a1", fontName = "C
 }
 
 // ==========================================
-// 1. أمر "رصيد" (بروفايل اللاعب - محرك البيانات الذكي والدقيق 100%)
-// متوافق مع ملف الانديكس بدون أي أخطاء أو تعارض
+// 1. أمر "رصيد" (بروفايل اللاعب - نسخة MongoDB الصاروخية)
 // ==========================================
-const { GoogleSpreadsheet } = require('google-spreadsheet');
-const { JWT } = require('google-auth-library');
 
-// دالة لتنظيف النصوص من الإيموجيات والرموز
 function cleanTextSafe(text) {
   if (!text) return "";
   return String(text).replace(/[^\u0600-\u06FFa-zA-Z0-9\s\-]/g, '').trim();
 }
 
-// فلتر الألعاب (يستبعد أي شيء مو قمار)
-function isExcludedGame(name) {
-  if (!name) return true;
-  const n = String(name).trim();
+function isGameTransaction(reason) {
+  if (!reason) return true;
+  const n = String(reason).trim();
   if (n === "" || n.includes("غير معروف") || n.includes("تحويل") || n.includes("استلام") || n.includes("راتب") || n.includes("يومي") || n.includes("مكافأة") || n.includes("هدية") || n.includes("عيدية") || n.includes("سلف") || n.includes("ربح من") || n.includes("ركب") || n.includes("فكك") || n.includes("جمع") || n.includes("سلسلة") || n.includes("حروف") || n.includes("حرف")) {
-    return true;
+    return false;
   }
-  return false;
+  return true;
 }
 
 async function handleWalletMessage(msg) {
@@ -6748,337 +6743,282 @@ async function handleWalletMessage(msg) {
   try {
     const userId = msg.author.id;
     const user = msg.author;
-    const avatarUrl = user.displayAvatarURL({ extension: 'png', size: 256 });
-    const cleanUsername = cleanTextSafe(user.username) || "مستخدم";
 
-    // 1. جلب الرصيد
-    const balance = await getBalance(userId);
-    
-    // 2. إحصائيات النشاط للفل
-    let msgsCount = 0;
-    let voiceSeconds = 0;
-    try {
-      const activity = await db.collection("user_activity").findOne({ userId });
-      if (activity) {
-        msgsCount = activity.textStats?.validMessages || 0;
-        voiceSeconds = activity.voiceStats?.totalSeconds || 0;
-      }
-    } catch (e) {}
+    // ✨ جلب البيانات فوراً بدون رسالة تحميل ✨
+    const [activity, uData, txs] = await Promise.all([
+      db.collection("user_activity").findOne({ userId }),
+      db.collection("users").findOne({ userId }),
+      db.collection("transactions").find({ userId: { $in: [userId, String(userId), Number(userId)] } }).toArray()
+    ]);
 
+    if (!uData) {
+      return msg.reply("❌ لم يتم العثور على بيانات لك، يبدو أنك لم تتفاعل بعد.");
+    }
+
+    // ✨ معالجة بيانات اللفل والرسائل بالحسبة التاريخية الدقيقة ✨
+    const msgsCount = activity?.textStats?.validMessages || 0;
+    const voiceSeconds = activity?.voiceStats?.totalSeconds || 0;
     const voiceMinutes = Math.floor(voiceSeconds / 60);
+    const voiceHours = (voiceSeconds / 3600).toFixed(1);
+    
+    // الحسبة المباشرة عشان ما يتصفر اللفل
     const totalXP = Math.floor((msgsCount * 5) + (voiceMinutes * 2));
-    const currentLevel = Math.floor(Math.pow(totalXP / 100, 0.5)) + 1; 
+    const currentLevel = Math.floor(Math.pow(totalXP / 100, 0.5)) + 1;
     const nextLevelBaseXP = Math.pow(currentLevel, 2) * 100;
     const xpProgress = Math.min(totalXP / nextLevelBaseXP, 1);
 
-    // 3. استخراج أكبر فوز وأكبر خسارة من الفواتير (صفقة واحدة)
+    const balance = uData.wallet || 0;
+
+    const joinedDate = msg.member ? msg.member.joinedAt : user.createdAt;
+    const memberSince = `${joinedDate.getDate()}/${joinedDate.getMonth() + 1}/${joinedDate.getFullYear()}`;
+
+    // ✨ حساب إحصائيات القمار الدقيقة ✨
     let biggestWin = 0;
     let biggestLoss = 0;
-    try {
-      const userTxs = await db.collection("transactions").find({ 
-        userId: { $in: [userId, String(userId), Number(userId)] } 
-      }).toArray();
+    let totalProfit = 0;
+    let totalLoss = 0;
+    let gamesCount = 0;
 
-      userTxs.forEach(tx => {
-        let amt = Number(tx.amount);
-        if (isNaN(amt)) return; 
+    txs.forEach(tx => {
+        const amt = Number(tx.amount);
+        if (isNaN(amt)) return;
         
-        let reason = cleanTextSafe(tx.reason || tx.game || "");
-        if (!isExcludedGame(reason)) {
+        const reason = tx.reason || tx.game || "";
+        if (isGameTransaction(reason)) {
+            gamesCount++;
             if (amt > biggestWin) biggestWin = amt;
-            if (amt < biggestLoss) biggestLoss = amt; 
+            if (amt < biggestLoss) biggestLoss = amt;
+            
+            if (amt > 0) totalProfit += amt;
+            if (amt < 0) totalLoss += Math.abs(amt);
         }
-      });
-      biggestLoss = Math.abs(biggestLoss); 
-    } catch (e) {}
+    });
+    biggestLoss = Math.abs(biggestLoss);
 
-    // 4. تحليل أداء الألعاب (من كولكشن solostats الخاص بك بدقة متناهية)
-    let txStats = [];
-    let highestWinNet = 0;
-    let highestLossNet = 0;
-    let mostWonGame = "لا يوجد";
-    let mostLostGame = "لا يوجد";
+    // ✨ النشاط الأسبوعي (معكوس ليتطابق مع واجهة اليمين لليسار) ✨
+    // 0: الأحد، 1: الإثنين... 6: السبت
+    // في التصميم: السبت يسار (index 0 في الرسم) والأحد يمين (index 6 في الرسم)
+    const dayMapping = [6, 5, 4, 3, 2, 1, 0]; 
+    const weeklyData = dayMapping.map(dayNum => {
+        const dayData = activity?.activityByDay?.[dayNum.toString()] || {};
+        const dayMsgs = dayData.msgs || 0;
+        const dayVoiceMin = Math.floor((dayData.voiceSecs || 0) / 60);
+        return (dayMsgs * 5) + (dayVoiceMin * 2);
+    });
 
-    try {
-      const soloDoc = await db.collection("solostats").findOne({ userId: String(userId) });
-      
-      // الدخول لبياناتك الصحيحة 
-      if (soloDoc && soloDoc.stats) {
-        for (const [gameId, data] of Object.entries(soloDoc.stats)) {
-          if (isExcludedGame(gameId)) continue;
+    // ✨ نسب التوزيع للدائرة ✨
+    const msgsXp = msgsCount * 5;
+    const voiceXp = Math.floor(voiceSeconds / 60) * 2;
+    const gamesXpWeight = gamesCount * 15; 
+    const totalActivityXp = msgsXp + voiceXp + gamesXpWeight || 1; 
 
-          const wins = Number(data.wins || 0);
-          const loses = Number(data.loses || 0); 
-          const net = Number(data.net || 0);
-          
-          const displayName = typeof getArabicGameName === 'function' ? getArabicGameName(gameId) : cleanTextSafe(gameId);
+    const pctMsgs = msgsXp / totalActivityXp;
+    const pctVoice = voiceXp / totalActivityXp;
+    const pctGames = gamesXpWeight / totalActivityXp;
 
-          txStats.push({
-            _id: displayName,
-            winCount: wins,
-            lossCount: loses,
-            netAmount: net
-          });
-
-          // حساب أكثر لعبة ربحاً وخسارة بناءً على "الصافي"
-          if (net > highestWinNet) {
-            highestWinNet = net;
-            mostWonGame = displayName;
-          }
-          if (net < highestLossNet) { 
-            highestLossNet = net;
-            mostLostGame = displayName;
-          }
-        }
-      }
-    } catch (e) {}
-
-    // 5. سحب أكثر روم ويوم من قوقل شيت (النسخة المحسنة اللي تسحب الجاهز)
-    let favChannel = "لا يوجد", activeDay = "لا يوجد";
-    try {
-      if (process.env.SHEET_ID) {
-        const auth = new JWT({ email: process.env.SHEET_CLIENT_EMAIL, key: process.env.SHEET_PRIVATE_KEY.replace(/\\n/g, '\n'), scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
-        const doc = new GoogleSpreadsheet(process.env.SHEET_ID, auth);
-        await doc.loadInfo();
-        
-        // تنبيه: تأكد إن هذا هو اسم الصفحة اللي فيها الجدول المجهز
-        const sheet = doc.sheetsByTitle['Messages']; 
-        
-        if (sheet) {
-          // جلب الصفوف (بدون ليميت عشان يجيب كل اللاعبين من جدول الملخص)
-          const rows = await sheet.getRows(); 
-          
-          // البحث المباشر عن الآي دي في العمود الأول
-          const userRow = rows.find(r => r.get('user_id_stats') === String(userId));
-          
-          if (userRow) {
-            // سحب البيانات الجاهزة من الأعمدة مباشرة
-            favChannel = cleanTextSafe(userRow.get('top_channel')) || "لا يوجد";
-            activeDay = cleanTextSafe(userRow.get('most_active_day')) || "لا يوجد";
-          }
-        }
-      }
-    } catch (e) {
-        console.error("خطأ في قراءة ملف الشيت:", e);
-    }
-
+// ==========================================
+    // 🎨 الرسم البياني (Canvas)
     // ==========================================
-    // 🎨 الرسم (تخطيط شفاف ومثالي بخطوط أكبر)
-    // ==========================================
-    const canvas = createCanvas(1920, 1080);
-    const ctx = canvas.getContext("2d");
+    const templatePath = path.join(__dirname, 'wallet.png'); // تأكد إن الاسم wallet.png
+    const background = await loadImage(templatePath);
+    const canvas = createCanvas(background.width, background.height);
+    const ctx = canvas.getContext('2d');
 
-    ctx.clearRect(0, 0, 1920, 1080);
+    ctx.drawImage(background, 0, 0, canvas.width, canvas.height);
 
-    function drawPanel(x, y, w, h) {
-      ctx.save();
-      ctx.fillStyle = "rgba(15, 20, 25, 0.75)"; 
-      ctx.beginPath();
-      ctx.roundRect ? ctx.roundRect(x, y, w, h, 15) : ctx.fillRect(x, y, w, h);
-      ctx.fill();
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
-      ctx.stroke();
-      ctx.restore();
-    }
+    const COLORS = {
+      TEXT: "#FFFFFF",
+      SUBTEXT: "#b698ce",
+      XP_BAR: "#C084FC", 
+      WIN: "#22C55E",
+      LOSS: "#EF4444",
+      CIRCLE_MSG: "#3B82F6",
+      CIRCLE_VOICE: "#A855F7",
+      CIRCLE_GAMES: "#F59E0B"
+    };
 
-    const COLOR_TEXT = "#F8FAFC";
-    const COLOR_SUBTEXT = "#b698ce";
-    const COLOR_ACCENT = "#FF8C00";
-    const COLOR_WIN = "#22C55E";
-    const COLOR_LOSS = "#EF4444";
-    const COLOR_PURPLE = "#C084FC"; // اللون البنفسجي الفاتح الجديد
-
-    drawPanel(50, 50, 1820, 230);   
-    drawPanel(990, 320, 880, 700);  
-    drawPanel(50, 320, 880, 700);   
+    const fontNumber = "bold 36px Arial";
 
     // --- الصورة الشخصية ---
+    const avatarUrl = user.displayAvatarURL({ extension: 'png', size: 256 });
     const avatar = await loadImage(avatarUrl);
     ctx.save();
     ctx.beginPath();
-    ctx.arc(1740, 165, 85, 0, Math.PI * 2, true);
+    ctx.arc(214, 161, 96, 0, Math.PI * 2, true);
     ctx.closePath();
     ctx.clip();
-    ctx.drawImage(avatar, 1655, 80, 170, 170);
+    ctx.drawImage(avatar, 214 - 96, 161 - 96, 192, 192);
     ctx.restore();
 
-    ctx.beginPath();
-    ctx.arc(1740, 165, 85, 0, Math.PI * 2, true);
-    ctx.lineWidth = 5;
-    ctx.strokeStyle = COLOR_PURPLE; // الإطار صار بنفسجي
-    ctx.stroke();
-
-    // --- اليوزر نيم واللفل ---
-    ctx.fillStyle = COLOR_TEXT;
-    ctx.font = "bold 75px Tahoma, sans-serif"; // تكبير اليوزر نيم
-    ctx.textAlign = "right";
-    ctx.fillText(cleanUsername, 1620, 140);
-
-    ctx.fillStyle = COLOR_PURPLE; // تم التغيير للبنفسجي
-    ctx.font = "bold 45px Tahoma, sans-serif"; // تكبير اللفل
-    ctx.fillText(`المستوى ${currentLevel}`, 1620, 200);
-
-    // --- شريط XP الدقيق مع الإطار الخارجي ---
-    const xpBarX = 1220;
-    const xpBarY = 220;
-    const xpBarW = 400;
-    const xpBarH = 18; // الشريط صار أسمك شوي
-    const xpRadius = 9;
-
-    // خلفية الشريط
-    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-    ctx.beginPath();
-    ctx.roundRect ? ctx.roundRect(xpBarX, xpBarY, xpBarW, xpBarH, xpRadius) : ctx.fillRect(xpBarX, xpBarY, xpBarW, xpBarH);
-    ctx.fill();
-
-    // الإطار الخارجي (Border) لشريط الإكس بي
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = COLOR_PURPLE;
-    ctx.stroke();
+    // --- البروفايل (اليسار) ---
+    ctx.textAlign = "center";
+    ctx.fillStyle = COLORS.TEXT;
+    ctx.font = "bold 34px sans-serif";
+    ctx.fillText(cleanTextSafe(user.username), 215, 312); 
     
-    // تعبئة التقدم (باللون البنفسجي)
-    ctx.fillStyle = COLOR_PURPLE;
-    const xpBarWidth = xpBarW * xpProgress;
-    if (xpBarWidth > 0) {
-      ctx.beginPath();
-      ctx.roundRect ? ctx.roundRect(1620 - xpBarWidth, xpBarY, xpBarWidth, xpBarH, xpRadius) : ctx.fillRect(1620 - xpBarWidth, xpBarY, xpBarWidth, xpBarH);
-      ctx.fill();
+    // الرصيد مع كلمة "ريال" يسار الرقم
+    const balStr = balance.toLocaleString('en-US');
+    ctx.font = fontNumber;
+    ctx.fillStyle = "#FFFFFF"; 
+    
+    // \\ تعديل 1: تنزيل الرصيد للأسفل (تقدر تزيد رقم 5 لتنزيله أكثر أو تنقصه)
+    const balanceY = 365 + 5; 
+    ctx.fillText(balStr, 216, balanceY); 
+    
+    const balWidth = ctx.measureText(balStr).width;
+    ctx.textAlign = "right";
+    ctx.font = "bold 22px Arial";
+    ctx.fillStyle = COLORS.SUBTEXT;
+    // \\ تابع للتعديل 1: كلمة ريال تنزل مع الرقم تلقائياً
+    ctx.fillText("ريال", 216 - (balWidth / 2) - 8, balanceY - 3);
+
+    // المستوى
+    ctx.textAlign = "right";
+    ctx.fillStyle = COLORS.TEXT;
+    ctx.font = "bold 28px sans-serif center";
+    ctx.fillText(currentLevel.toLocaleString('en-US'), 265, 485);
+
+    // نسبة التقدم
+    const xpText = `${totalXP.toLocaleString('en-US')} / ${Math.floor(nextLevelBaseXP).toLocaleString('en-US')}`;
+    
+    // \\ تعديل 2: تصغير الخط تلقائياً إذا كان النص طويل عشان ما يلمس الكلام اللي يساره
+    let xpFontSize = 24;
+    ctx.font = `bold ${xpFontSize}px Arial`;
+    const maxXpWidth = 140; // أقصى مساحة مسموحة للنص (تقدر تكبرها وتصغرها)
+    while (ctx.measureText(xpText).width > maxXpWidth && xpFontSize > 12) {
+        xpFontSize--;
+        ctx.font = `bold ${xpFontSize}px Arial`;
+    }
+    ctx.fillStyle = COLORS.SUBTEXT;
+    ctx.fillText(xpText, 395, 540);
+
+    // شريط المستوى
+    // \\ تعديل 3: رفع شريط المستوى بكسلين (طرحنا 2 من الارتفاع Y)
+    const barY = 557 - 2; 
+    const barX = 50, barW = 326, barH = 21, barRadius = 10;
+    if(xpProgress > 0) {
+        ctx.fillStyle = COLORS.XP_BAR;
+        const fillWidth = xpProgress * barW;
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(barX, barY, fillWidth, barH, barRadius);
+        else ctx.fillRect(barX, barY, fillWidth, barH);
+        ctx.fill();
     }
 
-    ctx.fillStyle = COLOR_PURPLE;
-    ctx.font = "bold 24px Tahoma, sans-serif"; // تكبير أرقام الـ XP
-    ctx.textAlign = "right";
-    ctx.fillText(`${totalXP} / ${nextLevelBaseXP} XP`, 1620, 265);
-
-    // --- الرصيد ---
-    ctx.textAlign = "left";
-    ctx.fillStyle = COLOR_SUBTEXT;
-    ctx.font = "bold 38px Tahoma, sans-serif"; // تكبير خط العنوان
-    ctx.fillText("الرصيد الحالي", 90, 130);
+    // --- الإحصائيات العلوية ---
+    ctx.textAlign = "center";
+    ctx.fillStyle = COLORS.TEXT;
+    ctx.font = fontNumber;
+    ctx.fillText(msgsCount.toLocaleString('en-US'), 605, 310);
+    ctx.fillText(voiceHours.toLocaleString('en-US'), 963, 310);
     
-    ctx.fillStyle = COLOR_TEXT; 
-    ctx.font = "bold 85px Tahoma, sans-serif"; // تكبير رقم الرصيد بشكل فخم
-    ctx.fillText(`${balance.toLocaleString("en-US")}`, 90, 215);
+    ctx.font = "bold 30px Arial";
+    ctx.fillText(memberSince, 1322, 310);
 
-// --- إحصائياتك (يمين الشاشة) ---
-    ctx.textAlign = "right";
-    ctx.fillStyle = COLOR_TEXT;
-    ctx.font = "bold 55px Tahoma, sans-serif"; 
-    ctx.fillText("إحصائياتك", 1820, 390); // رفعت العنوان شوي عشان نعطي مساحة للمربعات تحت
+    // --- إحصائيات الأرباح والخسائر ---
+    ctx.font = fontNumber;
+    
+    ctx.fillStyle = COLORS.WIN;
+    ctx.fillText(biggestWin.toLocaleString('en-US'), 568, 578);
+    ctx.fillText(totalProfit.toLocaleString('en-US'), 1083, 578);
+    
+    ctx.fillStyle = COLORS.LOSS;
+    ctx.fillText(biggestLoss.toLocaleString('en-US'), 824, 578);
+    ctx.fillText(totalLoss.toLocaleString('en-US'), 1348, 578);
 
-const statsRight = [
-      { label: "إجمالي الرسائل", value: `\u200F${msgsCount.toLocaleString()} رسالة` },
-      { label: "ساعات الصوت", value: `\u200F${(voiceMinutes / 60).toFixed(1)} ساعة` },
-      { label: "أكثر روم نشاطاً", value: favChannel },
-      { label: "أكثر يوم نشاطاً", value: activeDay },
-      { label: "أكبر فوز", value: `\u200F${biggestWin.toLocaleString()}`, color: COLOR_WIN },
-      { label: "أكبر خسارة", value: `\u200F${biggestLoss.toLocaleString()}`, color: COLOR_LOSS },
-      { label: "أكثر لعبة ربحاً", value: mostWonGame },
-      { label: "أكثر لعبة خسارة", value: mostLostGame }
+    // ================= الدائرة المجوفة ودوائر المؤشرات =================
+    // \\ تعديل 4: رفع الدائرة الكبيرة بكسلين (طرحنا 2 من محور cy)
+    const cx = 532, cy = 799 - 2, radius = 80, hollowRadius = 50;
+    let startAngle = -Math.PI / 2; 
+    
+    const slices = [
+        { val: pctMsgs, color: COLORS.CIRCLE_MSG },
+        { val: pctVoice, color: COLORS.CIRCLE_VOICE },
+        { val: pctGames, color: COLORS.CIRCLE_GAMES }
     ];
 
-    let currentLineY = 440; // حددنا موقع أول خط فاصل بالضبط
-    statsRight.forEach(stat => {
-      // 1. رسم الخط الفاصل
-      ctx.beginPath();
-      ctx.moveTo(1830, currentLineY);
-      ctx.lineTo(1030, currentLineY);
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      // 2. تحديد موقع النص (ننزل 48 بيكسل تحت الخط عشان تتوسط الكلمة المسافة بالضبط)
-      let textY = currentLineY + 48;
-
-      ctx.textAlign = "right";
-      ctx.fillStyle = COLOR_SUBTEXT;
-      ctx.font = "38px Tahoma, sans-serif"; 
-      ctx.fillText(stat.label, 1830, textY);
-      
-      ctx.textAlign = "left";
-      ctx.fillStyle = stat.color || COLOR_TEXT;
-      ctx.font = "bold 38px Tahoma, sans-serif"; 
-      ctx.fillText(stat.value, 1030, textY); 
-      
-      // 3. المسافة للسطر اللي بعده (صارت 70 بدال 75 عشان الكلمة الأخيرة ما تطلع برا المربع)
-      currentLineY += 70; 
+    slices.forEach(slice => {
+        if (slice.val <= 0) return;
+        const endAngle = startAngle + (slice.val * Math.PI * 2);
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.arc(cx, cy, radius, startAngle, endAngle);
+        ctx.fillStyle = slice.color;
+        ctx.fill();
+        startAngle = endAngle;
     });
 
-    // --- أدائك (يسار الشاشة) ---
-    ctx.textAlign = "right";
-    ctx.fillStyle = COLOR_TEXT;
-    ctx.font = "bold 55px Tahoma, sans-serif"; // تكبير العنوان وتغييره
-    ctx.fillText("أدائك", 890, 400);
+    ctx.beginPath();
+    ctx.arc(cx, cy, hollowRadius, 0, Math.PI * 2);
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over'; 
 
-    const activeGames = txStats.filter(g => (g.winCount + g.lossCount) > 0);
-    const gameBars = activeGames.sort((a, b) => (b.winCount + b.lossCount) - (a.winCount + a.lossCount)).slice(0, 5); 
-    
-    let barY = 485;
-    const barX = 90; 
-    const maxBarWidth = 800;
-
-    if (gameBars.length === 0) {
-      ctx.textAlign = "center";
-      ctx.fillStyle = COLOR_SUBTEXT;
-      ctx.font = "40px Tahoma, sans-serif";
-      ctx.fillText("لم تقم بتجربة أي لعبة بعد.", 490, 600);
-    } else {
-      gameBars.forEach(game => {
-        const totalGames = game.winCount + game.lossCount;
-        const winRate = totalGames > 0 ? (game.winCount / totalGames) : 0;
-        const winPercentStr = Math.round(winRate * 100) + "%";
-
-        // رسم اسم اللعبة
-        ctx.textAlign = "right";
-        ctx.fillStyle = COLOR_TEXT;
-        ctx.font = "bold 42px Tahoma, sans-serif"; // تكبير اسم اللعبة
-        ctx.fillText(game._id, 890, barY); 
-        
-        // رسم النسبة المئوية (يمين) والإحصائيات جنبها بتناسق تام
-        ctx.textAlign = "left";
-        ctx.fillStyle = winRate >= 0.5 ? COLOR_WIN : COLOR_LOSS;
-        ctx.font = "bold 32px Tahoma, sans-serif"; // تكبير النسبة المئوية
-        const pctText = `(${winPercentStr})`;
-        ctx.fillText(pctText, barX, barY); 
-
-        // قياس العرض تلقائياً لوضع الإحصائيات جنبه مباشرة
-        const pctWidth = ctx.measureText(pctText).width;
-
-        ctx.fillStyle = COLOR_SUBTEXT;
-        ctx.font = "28px Tahoma, sans-serif"; // تكبير الإحصائيات
-        ctx.fillText(`   فوز: ${game.winCount} | خسارة: ${game.lossCount}`, barX + pctWidth, barY); 
-
-        // الشريط الرمادي في الخلف
-        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+    // رسم الدوائر الصغيرة بجانب النصوص
+    function drawIndicatorCircle(x, y, color) {
         ctx.beginPath();
-        ctx.roundRect ? ctx.roundRect(barX, barY + 20, maxBarWidth, 20, 4) : ctx.fillRect(barX, barY + 20, maxBarWidth, 20);
+        ctx.arc(x, y, 7, 0, Math.PI * 2);
+        ctx.fillStyle = color;
         ctx.fill();
-        
-        const barGradient = ctx.createLinearGradient(barX + maxBarWidth, 0, barX, 0);
-        barGradient.addColorStop(0, winRate >= 0.5 ? COLOR_ACCENT : COLOR_LOSS);
-        barGradient.addColorStop(1, winRate >= 0.5 ? COLOR_WIN : "#991B1B");
-        
-        ctx.fillStyle = barGradient;
-        const fillWidth = winRate * maxBarWidth;
-        if (fillWidth > 0) {
-          ctx.beginPath();
-          ctx.roundRect ? ctx.roundRect(barX + maxBarWidth - fillWidth, barY + 20, fillWidth, 20, 4) : ctx.fillRect(barX + maxBarWidth - fillWidth, barY + 20, fillWidth, 20);
-          ctx.fill();
-        }
-
-        barY += 115; // زيادة المسافة العمودية بين الألعاب لتناسب الخطوط الكبيرة
-      });
     }
+    
+    // \\ تعديل 5: رفع ولف دائرة الرسائل (زدنا 2 يمين، وطرحنا 2 فوق)
+    drawIndicatorCircle(661 + 2, 757 - 2, COLORS.CIRCLE_MSG); 
+    drawIndicatorCircle(661, 800, COLORS.CIRCLE_VOICE);
+    drawIndicatorCircle(662, 845, COLORS.CIRCLE_GAMES);
 
+    // نصوص النسب المئوية
+    ctx.textAlign = "right";
+    ctx.font = "bold 24px Arial";
+    ctx.fillStyle = COLORS.CIRCLE_MSG;
+    ctx.fillText(`${(pctMsgs * 100).toFixed(1)}%`, 370, 720);
+    
+    ctx.fillStyle = COLORS.CIRCLE_VOICE;
+    ctx.fillText(`${(pctVoice * 100).toFixed(1)}%`, 370, 792);
+    
+    ctx.fillStyle = COLORS.CIRCLE_GAMES;
+    ctx.fillText(`${(pctGames * 100).toFixed(1)}%`, 370, 865);
+
+    // ================= الرسم البياني الأسبوعي =================
+    // باقي الكود كما هو تماماً ...    // ================= الرسم البياني الأسبوعي =================
+    const chartX = 981, chartY = 718, chartW = 499, chartH = 136;
+    const maxActivity = Math.max(...weeklyData, 1); 
+    const colWidth = 42; 
+    const colSpacing = (chartW - (7 * colWidth)) / 6; 
+
+    weeklyData.forEach((val, idx) => {
+        let colHeight = (val / maxActivity) * chartH;
+        // حد أدنى للارتفاع عشان يبان العمود لو النشاط قليل
+        if (val > 0 && colHeight < 5) colHeight = 5; 
+        if (colHeight <= 0) return;
+
+        const xPos = chartX + (idx * (colWidth + colSpacing));
+        const yPos = chartY + chartH - colHeight; 
+        
+        const gradient = ctx.createLinearGradient(0, yPos, 0, chartY + chartH);
+        gradient.addColorStop(0, COLORS.CIRCLE_VOICE); 
+        gradient.addColorStop(1, COLORS.CIRCLE_MSG);   
+
+        ctx.fillStyle = gradient;
+        
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(xPos, yPos, colWidth, colHeight, 6);
+        else ctx.fillRect(xPos, yPos, colWidth, colHeight);
+        ctx.fill();
+    });
+
+    // ✨ تصدير وإرسال الصورة ✨
     const buffer = await canvas.encode("png");
     const attachment = new AttachmentBuilder(buffer, { name: "wallet_profile.png" });
     
-    return msg.reply({ files: [attachment] });
+    await msg.reply({ files: [attachment] });
+
+    // تنظيف الذاكرة
+    canvas.width = 0;
+    canvas.height = 0;
 
   } catch (error) {
-    console.error("خطأ في أمر الرصيد المطور:", error);
-    return msg.reply("❌ واجهت مشكلة في تجهيز بروفايلك.");
+    console.error("❌ خطأ في أمر الرصيد المطور:", error);
   }
 }
 // ==========================================
