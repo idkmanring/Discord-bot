@@ -3,16 +3,13 @@ const { AttachmentBuilder } = require("discord.js");
 const { createCanvas, loadImage } = require("@napi-rs/canvas");
 const path = require("path");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { addGameReward } = require("../utils/economyEffects");
 
 // إعداد Gemini API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 async function addBalance(userId, amount, db) {
-  await db.collection("users").updateOne(
-    { userId: String(userId) },
-    { $inc: { wallet: amount } },
-    { upsert: true }
-  );
+  return addGameReward(userId, amount, db);
 }
 
 const updateMinigameStats = require("../utils/updateMinigameStats");
@@ -235,10 +232,10 @@ module.exports = async function startRakkibGame(interaction, db) {
         prev.points += pointsEarned;
         scores.set(msg.author.id, prev);
 
-        await addBalance(msg.author.id, cashEarned, db);
+        const reward = await addBalance(msg.author.id, cashEarned, db);
         await db.collection("transactions").insertOne({
           userId: msg.author.id,
-          amount: cashEarned,
+          amount: reward.finalAmount,
           reason: "ربح من لعبة ركب",
           timestamp: new Date()
         });

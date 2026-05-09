@@ -1,5 +1,6 @@
 // minigames/imposter.js
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require("discord.js");
+const { addGameReward } = require("../utils/economyEffects");
 
 const imposterQuestionsPool = require("../data/imposter_questions.json");
 const activeLobbies = new Map();
@@ -364,9 +365,8 @@ async function distributePrizes(game, winningTeam) {
   ).map(p => p.id);
 
   if (winners.length > 0) {
-    await game.db.collection("users").updateMany(
-      { userId: { $in: winners } },
-      { $inc: { wallet: amount } }
-    );
+    for (const winnerId of winners) {
+      await addGameReward(winnerId, amount, game.db);
+    }
   }
 }

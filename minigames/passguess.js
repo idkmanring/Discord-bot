@@ -1,6 +1,7 @@
 // minigames/passguess.js
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require("discord.js");
 const { createCanvas } = require("@napi-rs/canvas");
+const { addGameReward } = require("../utils/economyEffects");
 
 const activeLobbies = new Map();
 const activeGames = new Map();
@@ -462,11 +463,7 @@ module.exports.handleMessages = async function(msg, db) {
     if (game.isOffline) {
       activeGames.delete(msg.channel.id);
       
-      await db.collection("users").updateOne(
-        { userId: String(currentPlayer.id) },
-        { $inc: { wallet: 50000 } },
-        { upsert: true }
-      );
+      await addGameReward(currentPlayer.id, 50000, db);
       
       const imgBuffer = await buildBoardImage(currentPlayer, "البوت", true);
       const att = new AttachmentBuilder(imgBuffer, { name: "win.png" });
@@ -479,11 +476,7 @@ module.exports.handleMessages = async function(msg, db) {
       if (game.alivePlayers.length === 1) {
         activeGames.delete(msg.channel.id);
         
-        await db.collection("users").updateOne(
-          { userId: String(currentPlayer.id) },
-          { $inc: { wallet: 100000 } },
-          { upsert: true }
-        );
+        await addGameReward(currentPlayer.id, 100000, db);
         
         const imgBuffer = await buildBoardImage(currentPlayer, "الجميع", false);
         const att = new AttachmentBuilder(imgBuffer, { name: "win.png" });

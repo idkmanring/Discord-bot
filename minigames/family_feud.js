@@ -2,6 +2,7 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } = require("discord.js");
 const { createCanvas } = require("@napi-rs/canvas");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { addGameReward } = require("../utils/economyEffects");
 
 // 🔴 استدعاء ملف الأسئلة المحلي
 const feudQuestionsPool = require("../data/feud_questions.json");
@@ -543,10 +544,14 @@ async function endGame(channel, game, forcedMsg = null) {
   
   // توزيع الجوائز
   if (game.scores.green > 0) {
-    await game.db.collection("users").updateMany({ userId: { $in: game.teams.green } }, { $inc: { wallet: game.scores.green } });
+    for (const userId of game.teams.green) {
+      await addGameReward(userId, game.scores.green, game.db);
+    }
   }
   if (game.scores.red > 0) {
-    await game.db.collection("users").updateMany({ userId: { $in: game.teams.red } }, { $inc: { wallet: game.scores.red } });
+    for (const userId of game.teams.red) {
+      await addGameReward(userId, game.scores.red, game.db);
+    }
   }
 
   const embed = new EmbedBuilder()

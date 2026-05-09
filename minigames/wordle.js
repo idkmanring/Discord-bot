@@ -1,10 +1,9 @@
 // minigames/wordle.js
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 const { createCanvas, loadImage } = require("@napi-rs/canvas");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-
-// إعداد Gemini API
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const fs = require("fs");
+const path = require("path");
+const { addGameReward } = require("../utils/economyEffects");
 
 const WORDLE_LEN = 4;
 const WORDLE_MAX_ATTEMPTS = 5;
@@ -18,52 +17,54 @@ const ARABIC_ALPHABET = [
   "ط","ظ","ع","غ","ف","ق","ك","ل","م","ن","ه","و","ي","ة","ء"
 ];
 
-// ==========================================
-// 1. توليد الكلمة عبر Gemini والتحقق من MongoDB
-// ==========================================
-async function generateWordleWord(db) {
-  const model = genAI.getGenerativeModel({ 
-    model: "gemini-3.1-flash-lite-preview",
-    generationConfig: { temperature: 1.2 } // قللنا الإبداع شوي عشان ما يخترع كلمات غريبة
-  });
-  
-  const fallbacks = ["عالم", "كوكب", "قارب", "طريق", "جبال", "بحار", "وردة", "شجرة", "سريع", "حمار", "كتاب", "رياح", "عصفور", "شمس"];
-  let attempts = 0;
+function normalizeArabicWord(raw) {
+  return String(raw || "")
+    .replace(/[\u064B-\u065F\u0670]/g, "")
+    .replace(/[أإآٱ]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/[^ء-ي]/g, "")
+    .trim();
+}
 
-  while (attempts < 5) {
-    try {
-      const prompt = `أنت خبير لغة عربية. أعطني كلمة عربية واحدة فقط، اسم أو صفة "حقيقية وموجودة في القاموس العربي"، مكونة من 4 حروف بالضبط.
-شروط صارمة جداً:
-1. الكلمة يجب أن تكون حقيقية 100% ولها معنى واضح (إياك أن تخترع حروفاً عشوائية لا معنى لها).
-2. إياك استخدام الحروف التالية أبداً: (ى، ؤ، ئ).
-3. ابتكر كلمة جديدة وفريدة في كل مرة. إياك تكرار الكلمات.
-4. أمثلة للتنسيق وللفهم فقط (يمنع استخدامها في ردك): كتاب، تفاح، قارب، بحار.
-5. أجب بالكلمة فقط بدون تشكيل وبدون مسافات وبدون أي نص إضافي.`;
-      
-      const result = await model.generateContent(prompt);
-      let word = result.response.text().trim();
-      
-      // تنظيف الكلمة
-      word = word.replace(/[\u064B-\u065F]/g, ''); 
-      word = word.split(/\s+/)[0]; 
-      word = word.replace(/[^ء-ي]/g, '');
-
-      if (word.length === WORDLE_LEN && !word.includes('ى') && !word.includes('ؤ') && !word.includes('ئ')) {
-        const existing = await db.collection("wordle_words").findOne({ word });
-        if (!existing) {
-          await db.collection("wordle_words").insertOne({ word, createdAt: new Date() });
-          return word;
-        }
-      }
-    } catch (err) {
-      console.error("Gemini Wordle Error:", err.message);
-    }
-    attempts++;
+function readWordList(fileName) {
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "data", fileName), "utf8"));
+    return Array.isArray(data)
+      ? data.map((entry) => typeof entry === "string" ? entry : entry?.word).filter(Boolean)
+      : [];
+  } catch (err) {
+    console.error(`Wordle data read error (${fileName}):`, err.message);
+    return [];
   }
-  
-  const fallbackWord = fallbacks[Math.floor(Math.random() * fallbacks.length)];
-  await db.collection("wordle_words").updateOne({ word: fallbackWord }, { $set: { word: fallbackWord } }, { upsert: true });
-  return fallbackWord;
+}
+
+const WORDLE_WORDS = [...new Set([
+  ...readWordList("word_pool.json"),
+  ...readWordList("dictionary.json"),
+].map(normalizeArabicWord).filter((word) =>
+  word.length === WORDLE_LEN &&
+  !word.startsWith("ال") &&
+  !word.startsWith("ب") &&
+  !word.endsWith("ي") &&
+  !/[ءئؤ]/.test(word)
+))];
+
+async function generateWordleWord(db) {
+  const fallbacks = ["عالم", "كوكب", "قارب", "طريق", "كتاب", "رياح", "شمس"];
+  const pool = WORDLE_WORDS.length ? WORDLE_WORDS : fallbacks;
+
+  for (let attempts = 0; attempts < 30; attempts++) {
+    const word = pool[Math.floor(Math.random() * pool.length)];
+    const existing = await db.collection("wordle_words").findOne({ word });
+    if (!existing) {
+      await db.collection("wordle_words").insertOne({ word, createdAt: new Date(), source: "data_files" });
+      return word;
+    }
+  }
+
+  const word = pool[Math.floor(Math.random() * pool.length)];
+  await db.collection("wordle_words").updateOne({ word }, { $set: { word, updatedAt: new Date() } }, { upsert: true });
+  return word;
 }
 
 // ==========================================
@@ -268,14 +269,11 @@ async function sendBoardMessage(channel, session, finalMsg) {
 // 3. إدارة الرصيد والإحصائيات وجلسة اللعب
 // ==========================================
 async function updateBalanceWithLogLocally(db, userId, amount, reason) {
-  await db.collection("users").updateOne(
-    { userId: String(userId) },
-    { $inc: { wallet: amount } },
-    { upsert: true }
-  );
+  const reward = await addGameReward(userId, amount, db);
   await db.collection("transactions").insertOne({
-    userId: String(userId), amount, reason, timestamp: new Date()
+    userId: String(userId), amount: reward.finalAmount, reason, timestamp: new Date()
   });
+  return reward;
 }
 
 async function wordleStatsPlayed(userId, db) {
@@ -307,7 +305,7 @@ async function wordleStatsLose(userId, db) {
 }
 
 async function startWordleForUser(channel, userId, db) {
-  const loadingMsg = await channel.send("⏳ جاري توليد كلمة سرية جديدة وفريدة من 4 حروف...");
+  const loadingMsg = await channel.send("⏳ جاري اختيار كلمة سرية من ملفات الداتا...");
   
   const secret = await generateWordleWord(db);
   
@@ -350,7 +348,7 @@ module.exports.handleWordleGuess = async function(msg, db) {
   const s = wordleSessions.get(userId);
   if (!s || s.ended || msg.channel.id !== s.channelId) return;
 
-  const text = (msg.content || "").trim().replace(/\s+/g, '');
+  const text = normalizeArabicWord((msg.content || "").trim().replace(/\s+/g, ''));
   if (!text) return;
   if (text.length !== WORDLE_LEN) {
       msg.reply(`❗ أرسل كلمة من ${WORDLE_LEN} أحرف بالضبط.`).then(m => setTimeout(()=>m.delete().catch(()=> {}), 3000));
@@ -371,8 +369,8 @@ module.exports.handleWordleGuess = async function(msg, db) {
   if (isWin) {
     s.ended = true;
     s.won = true;
-    await updateBalanceWithLogLocally(db, userId, WORDLE_REWARD, "لعبة حروف: فوز");
-    await wordleStatsWin(userId, WORDLE_REWARD, db);
+    const reward = await updateBalanceWithLogLocally(db, userId, WORDLE_REWARD, "لعبة حروف: فوز");
+    await wordleStatsWin(userId, reward.finalAmount, db);
     await sendBoardMessage(msg.channel, s, true);
     wordleSessions.delete(userId);
     return;

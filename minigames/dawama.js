@@ -1,6 +1,7 @@
 // minigames/dawama.js
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } = require("discord.js");
 const { createCanvas } = require("@napi-rs/canvas");
+const { addGameReward } = require("../utils/economyEffects");
 
 // 🔴 استدعاء ملف الجمل الجاهز
 const sentencesPool = require("../data/dawama_sentences.json");
@@ -542,13 +543,9 @@ module.exports.handleDawamaActionButtons = async function(i, db) {
 async function handleDawamaWin(msg, game, currentPlayer, db, isAutoWin = false) {
   let totalPot = game.players.reduce((sum, p) => sum + p.balance, 0);
   
-  await db.collection("users").updateOne(
-    { userId: String(currentPlayer.id) },
-    { $inc: { wallet: totalPot } },
-    { upsert: true }
-  );
+  const reward = await addGameReward(currentPlayer.id, totalPot, db);
   await db.collection("transactions").insertOne({
-    userId: String(currentPlayer.id), amount: totalPot, reason: "فوز في لعبة الدوامة", timestamp: new Date()
+    userId: String(currentPlayer.id), amount: reward.finalAmount, reason: "فوز في لعبة الدوامة", timestamp: new Date()
   });
 
   game.revealed = game.sentence.split("").map(c => normalizeChar(c));

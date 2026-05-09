@@ -10,9 +10,9 @@ module.exports = async function showMinigameStats(interaction, db) {
     { key: "fakkak", name: "فكّك <:icons8bigpuzzle1001:1416010648818815016> " },
     { key: "jam3", name: "جمّع <:icons8puzzlematching100:1416010655340695654> " },
     { key: "asra3", name: "أسرع <:icons8fast100:1416010645937061958> " },
-    { key: "rakkib", name: "ركّب <:icons8bigpuzzle100:1416010651834257409> " },
     { key: "flags_country", name: "اعلام دول <:icons8saudiarabia100:1416010643248517162> " },
-    { key: "flags_capital", name: "عواصم دول <:icons8country100:1416010657689763912>" }
+    { key: "flags_capital", name: "عواصم دول <:icons8country100:1416010657689763912>" },
+    { key: "countries", name: "دول 🌍" }
   ];
 
   const embed = new EmbedBuilder()

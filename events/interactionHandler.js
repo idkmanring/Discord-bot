@@ -2,9 +2,9 @@
 const startFakkakGame = require("../minigames/fakkak");
 const startJam3Game = require("../minigames/jam3");
 const startAsra3Game = require("../minigames/asra3");
-const startRakkibGame = require("../minigames/rakkib");
 const startFlagsCountryGame = require("../minigames/flags_country");
 const startFlagsCapitalGame = require("../minigames/flags_capital");
+const startCountriesGame = require("../minigames/countries");
 
 // استدعاء ملفات الألعاب الجديدة 👇
 const { startHarfFromMenu } = require("../minigames/harf");
@@ -31,9 +31,9 @@ module.exports = async function handleInteraction(interaction, db) {
       fakkak: startFakkakGame,
       jam3: startJam3Game,
       asra3: startAsra3Game,
-      rakkib: startRakkibGame,
       flags_country: startFlagsCountryGame,
       flags_capital: startFlagsCapitalGame,
+      countries: startCountriesGame,
       harf: startHarfFromMenu,     
       wordle: startWordleFromMenu,  
       pic_challenge: startPicChallengeFromMenu,

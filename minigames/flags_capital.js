@@ -1,12 +1,9 @@
 // minigames/flags_capital.js
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const { addGameReward } = require("../utils/economyEffects");
 
 async function addBalance(userId, amount, db) {
-  await db.collection("users").updateOne(
-    { userId: String(userId) },
-    { $inc: { wallet: amount } },
-    { upsert: true }
-  );
+  return addGameReward(userId, amount, db);
 }
 
 const flags = require("../data/flags.json");
@@ -82,10 +79,10 @@ module.exports = async function startFlagsCapitalGame(interaction, db) {
         scores.set(userId, prev);
 
         // إضافة فلوس
-        await addBalance(userId, 1000, db);
+        const reward = await addBalance(userId, 1000, db);
         await db.collection("transactions").insertOne({
           userId,
-          amount: 1000,
+          amount: reward.finalAmount,
           reason: "ربح من لعبة عواصم",
           timestamp: new Date()
         });

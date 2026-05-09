@@ -1,5 +1,105 @@
 // 📁 /shop/utils.js
 
+const {
+  activateEffect,
+  addGameReward,
+  getAdjustedReward,
+  getProtectedDebit,
+  hasActiveEffect,
+  refundLossProtection,
+  subtractGameLoss,
+} = require("../utils/economyEffects");
+
+const SHOP_CUSTOM_ID_PREFIXES = [
+  "shop_nickname_modal_target",
+  "shop_nickname_modal_self",
+  "confirm_privileges_purchase",
+  "confirm_roles_purchase",
+  "confirm_mention_jail",
+  "confirm_mention_bail",
+  "confirm_rename_member",
+  "confirm_timeout",
+  "confirm_visit",
+  "confirm_mute",
+  "confirm_steal",
+  "shop_section_select",
+  "shop_target_select",
+  "shop_target_prev",
+  "shop_target_next",
+  "privileges_menu",
+  "punishments_menu",
+  "roles_menu",
+  "jail_menu",
+  "gambling_menu",
+  "shop_back",
+].sort((a, b) => b.length - a.length);
+
+function makeShopCustomId(baseId, ownerId, ...extraParts) {
+  return [baseId, ownerId, ...extraParts].filter(Boolean).join("_");
+}
+
+function parseShopCustomId(customId = "") {
+  const id = String(customId || "");
+  for (const baseId of SHOP_CUSTOM_ID_PREFIXES) {
+    if (id === baseId) return { baseId, ownerId: null, extra: [] };
+    const prefix = `${baseId}_`;
+    if (id.startsWith(prefix)) {
+      const parts = id.slice(prefix.length).split("_").filter(Boolean);
+      return { baseId, ownerId: parts[0] || null, extra: parts.slice(1) };
+    }
+  }
+  return { baseId: id, ownerId: null, extra: [] };
+}
+
+async function assertShopOwner(interaction) {
+  const parsed = parseShopCustomId(interaction.customId);
+  const ownerId = parsed.ownerId || interaction.user?.id;
+
+  interaction.shopBaseId = parsed.baseId;
+  interaction.shopOwnerId = ownerId;
+  interaction.shopCustomExtra = parsed.extra;
+
+  if (parsed.ownerId && interaction.user?.id !== parsed.ownerId) {
+    await interaction.reply({
+      content: "هذه رسالة متجر خاصة بصاحبها فقط.",
+      ephemeral: true,
+    }).catch(() => {});
+    return null;
+  }
+
+  return ownerId;
+}
+
+function getShopBaseId(interaction) {
+  return interaction.shopBaseId || parseShopCustomId(interaction.customId).baseId;
+}
+
+function getShopOwnerId(interaction) {
+  return interaction.shopOwnerId || parseShopCustomId(interaction.customId).ownerId || interaction.user?.id;
+}
+
+function getShopCustomExtra(interaction) {
+  return interaction.shopCustomExtra || parseShopCustomId(interaction.customId).extra;
+}
+
+function validateNickname(rawName) {
+  const nickname = String(rawName || "").trim();
+
+  if (nickname.length < 1) {
+    return { ok: false, reason: "اكتب اسمًا من حرف واحد على الأقل." };
+  }
+
+  if (nickname.length > 32) {
+    return { ok: false, reason: "نك نيم ديسكورد لا يزيد عن 32 حرفًا." };
+  }
+
+  if (/[\r\n\t]/.test(nickname)) {
+    return { ok: false, reason: "الاسم لا يقبل أسطرًا أو رموز تحكم." };
+  }
+
+  return { ok: true, nickname };
+}
+
 // ✅ جلب الأغراض من قسم معين
 async function getShopItems(section, db) {
   return await db.collection("shop_items").find({ section }).toArray();
@@ -101,5 +201,19 @@ module.exports = {
   buyItem,
   getBalance,
   subtractBalance,
-  recordTransaction
+  recordTransaction,
+  activateEffect,
+  addGameReward,
+  assertShopOwner,
+  getAdjustedReward,
+  getProtectedDebit,
+  getShopBaseId,
+  getShopCustomExtra,
+  getShopOwnerId,
+  hasActiveEffect,
+  makeShopCustomId,
+  parseShopCustomId,
+  refundLossProtection,
+  subtractGameLoss,
+  validateNickname
 };

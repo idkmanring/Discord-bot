@@ -2,13 +2,10 @@
 const { AttachmentBuilder } = require("discord.js");
 const { createCanvas, loadImage } = require("@napi-rs/canvas");
 const path = require("path");
+const { addGameReward } = require("../utils/economyEffects");
 
 async function addBalance(userId, amount, db) {
-  await db.collection("users").updateOne(
-    { userId: String(userId) },
-    { $inc: { wallet: amount } },
-    { upsert: true }
-  );
+  return addGameReward(userId, amount, db);
 }
 
 const wordPool = require("../data/word_pool.json");
@@ -77,10 +74,10 @@ module.exports = async function startAsra3Game(interaction, db) {
         scores.set(msg.author.id, prev);
 
         // إضافة فلوس
-        await addBalance(msg.author.id, 1000, db);
+        const reward = await addBalance(msg.author.id, 1000, db);
         await db.collection("transactions").insertOne({
           userId: msg.author.id,
-          amount: 1000,
+          amount: reward.finalAmount,
           reason: "ربح من لعبة أسرع",
           timestamp: new Date()
         });

@@ -11,10 +11,16 @@ const { Client, GatewayIntentBits, Events, EmbedBuilder, ActionRowBuilder, Butto
 const { MongoClient } = require("mongodb");
 const mongoose = require('mongoose');
 const dotenv = require("dotenv");
+const {
+  getAdjustedReward,
+  getProtectedDebit,
+  refundLossProtection,
+} = require("./utils/economyEffects");
 dotenv.config();
 const activeGames = {};
 const fs = require('fs');
 const path = require('path');
+const setupLeagueSystem = require("./systems/leagueSystem");
 
 // ✨ تم تعديل هذا الجزء وإضافة الصلاحيات المطلوبة ✨
 const client = new Client({
@@ -152,6 +158,8 @@ assets.explosion = await loadImage(path.join(__dirname, "assets/templates/explos
 assets.mysterybox = await loadImage(path.join(__dirname, "assets/templates/mysterybox.png"));
 assets.closedbox = await loadImage(path.join(__dirname, "assets/templates/closedbox.png"));
 assets.roulletesolo = await loadImage(path.join(__dirname, "assets/templates/roulletesolo.png"));
+assets.chairs = await loadImage(path.join(__dirname, "assets/templates/chairs.png"));
+assert.manygames = await loadImage(path.join(__dirname, "assets/templates/manygames.png"));
 assets.harf_board = await loadImage(fs.readFileSync(path.join(__dirname, "assets/templates/harf_board.png")));
 }
 preloadAssets();
@@ -206,6 +214,7 @@ mongoose.connect('mongodb+srv://Bots:Tl51R0bnMe1O4OeX@discordbot.gyvpxdk.mongodb
   .then(() => console.log('<:icons8correct1002:1415979896433278986> Mongoose Connected!'))
   .catch((err) => console.error('<:icons8wrong1001:1415979909825695914> Mongoose Connection Error:', err));
 
+setupLeagueSystem(client);
 client.login(process.env.DISCORD_TOKEN);
 
 // ===== Router عام للتفاعلات والاوامر + الرسائل =====
@@ -377,6 +386,7 @@ const ui = createUIRouter(client);
 // ربط دوال التحويل بالراوتر عشان تشتغل الأزرار والقائمة
 ui.messageExact("تحويل", handleTransferMessage);
 ui.selectPrefix("bank_transfer_select_", handleTransferSelectUser);
+ui.buttonPrefix("bank_transfer_page_", handleTransferPageButtons);
 ui.buttonPrefix("bank_transfer_key_", handleTransferKeys);
 // ===== Solo Bet Flow =====
 ui.buttonExact("hit", handleMultiplayerBlackjackInteraction);
@@ -386,8 +396,7 @@ ui.buttonPrefix("withdraw_", handleTimeRoomWithdraw);
 // سجل ازرار اللعبة في الراوتر
 ui.buttonPrefix("roulette_", handleRouletteButtons);
 
-// سجّل الزر مع راوتر التفاعلات
-ui.buttonPrefix("passbomb_", handleBombPass);
+ui.buttonPrefix("chairs_", handleChairsButtons);
 
 // اختيار لعبة متعددة اللاعبين
 ui.selectExact("select_multi_game", handleSelectMultiGame);
@@ -402,6 +411,7 @@ ui.buttonExact("lobby_join", handleLobbyJoin);
 ui.buttonExact("lobby_bet", handleLobbyBet);
 ui.buttonExact("lobby_leave", handleLobbyLeave);
 ui.buttonExact("lobby_start", handleLobbyStart);
+ui.buttonExact("lobby_hide_toggle", handleLobbyHideToggle);
 
 // مودالات الرهان
 ui.modalPattern("force_bet_modal_{userId}_{gameId}", handleForceBetModal);
@@ -412,19 +422,37 @@ ui.selectExact('minigame_menu', handleMinigameMenu);
 ui.buttonExact('minigame_stats', handleMinigameStats);
 
 ui.selectExact('shop_section_select', handleShopSelect);
+ui.selectPrefix('shop_section_select_', handleShopSelect);
 ui.selectExact('punishments_menu', handleShopSelect);
+ui.selectPrefix('punishments_menu_', handleShopSelect);
 ui.selectExact('roles_menu', handleShopSelect);
+ui.selectPrefix('privileges_menu_', handleShopSelect);
 ui.selectExact('jail_menu', handleShopSelect);
+ui.selectPrefix('jail_menu_', handleShopSelect);
+ui.selectPrefix('shop_target_select_', handleShopSelect);
 ui.selectExact('gambling_menu', handleShopSelect);
+ui.selectPrefix('gambling_menu_', handleShopSelect);
 
 ui.buttonExact('shop_back', handleShopButtons);
+ui.buttonPrefix('shop_back_', handleShopButtons);
+ui.buttonPrefix('shop_target_prev_', handleShopButtons);
+ui.buttonPrefix('shop_target_next_', handleShopButtons);
 ui.buttonExact('confirm_roles_purchase', handleShopButtons);
+ui.buttonPrefix('confirm_privileges_purchase_', handleShopButtons);
 ui.buttonExact('confirm_mention_jail', handleShopButtons);
+ui.buttonPrefix('confirm_mention_jail_', handleShopButtons);
 ui.buttonExact('confirm_mention_bail', handleShopButtons);
+ui.buttonPrefix('confirm_mention_bail_', handleShopButtons);
 ui.buttonExact('confirm_visit', handleShopButtons);
+ui.buttonPrefix('confirm_visit_', handleShopButtons);
 ui.buttonExact('confirm_timeout', handleShopButtons);
+ui.buttonPrefix('confirm_timeout_', handleShopButtons);
 ui.buttonExact('confirm_mute', handleShopButtons);
+ui.buttonPrefix('confirm_mute_', handleShopButtons);
 ui.buttonExact('confirm_steal', handleShopButtons);
+ui.buttonPrefix('confirm_steal_', handleShopButtons);
+ui.buttonPrefix('confirm_rename_member_', handleShopButtons);
+ui.modalPrefix('shop_nickname_modal_', handleShopModals);
 
 
 // ===== Specific Games =====
@@ -555,16 +583,6 @@ ui.buttonPrefix("impv_", (i) => imposterModule.handleVotingButtons(i));
 ui.modalPrefix("imp_modal_ans_", (i) => imposterModule.handleModal(i));
 
 
-const { fork } = require('child_process');
-
-// تشغيل الصوت في معالج منفصل (لمنع التقطيع)
-const voiceProcess = fork(path.join(__dirname, 'voiceManager.js'));
-
-voiceProcess.on('error', (err) => {
-    console.error('خطأ في تشغيل بوتات الصوت:', err);
-});
-
-
 /******************************************
  * 🔌 ربط تريفيا مع الراوتر
  ******************************************/
@@ -580,6 +598,7 @@ ui.messageExact("قمار", handleGambleMainMenu);
 ui.messageExact("511", handleGambleMainMenu);
 ui.buttonExact("gamble_solo", handleGambleCategory);
 ui.buttonExact("gamble_multi", handleGambleCategory);
+ui.buttonExact("gamble_minigames", handleGambleMinigames);
 ui.buttonExact("back_to_main", handleBackToMain);
 ui.buttonExact("solostats", handleSoloStatsButton);
 ui.buttonExact("multi_stats", handleMultiStatsButton);
@@ -607,7 +626,7 @@ ui.buttonExact("solo_roulette_cancel", handleSoloRouletteButtons);
 
 // ===== Message Commands =====
 ui.commandExact('المتجر', handleShopCommandMsg);
-ui.commandExact('العاب', handleMinigamesCommandMsg);
+ui.commandExact('العاب', handleGambleMainMenu);
 ui.messagePrefix?.("تحويل", handleTransferMessage);
 ui.messageFilter?.((msg) => msg.content.trim().startsWith("تحويل"), handleTransferMessage);
 ui.messageExact("كشف", handleStatementMessage);
@@ -621,6 +640,7 @@ function handleMinigameMenu(i) { return handleMinigameInteraction(i, db); }
 function handleMinigameStats(i) { return handleMinigameInteraction(i, db); }
 function handleShopSelect(i) { return handleShopInteraction(i, db); }
 function handleShopButtons(i) { return handleShopInteraction(i, db); }
+function handleShopModals(i) { return handleShopInteraction(i, db); }
 
 
 function handleHarfModalSubmit(i) { return handleHarfModal(i); }
@@ -924,6 +944,18 @@ async function subtractBalance(userId, amount) {
   );
 }
 
+function shouldDoubleGameReward(reason) {
+  const text = String(reason || "");
+  return ["فوز", "مكاف", "ربح", "إجابة صحيحة", "اجابة صحيحة"].some((word) => text.includes(word));
+}
+
+async function applyLossProtectionRefund(userId, lossAmount, reason = "تعويض حماية الخسارة") {
+  return refundLossProtection(userId, lossAmount, db, reason).catch((err) => {
+    console.error("loss protection refund error:", err);
+    return null;
+  });
+}
+
 // 📦 دوال المتجر - ضيفها بجانب دوال الاقتصاد
 
 async function getShopItems(section) {
@@ -961,18 +993,27 @@ async function buyItem(userId, item) {
 async function updateBalanceWithLog(db, userId, amount, reason) {
   const users = db.collection("users");
   const transactions = db.collection("transactions");
+  let finalAmount = Number(amount) || 0;
+
+  if (finalAmount > 0 && shouldDoubleGameReward(reason)) {
+    const reward = await getAdjustedReward(userId, finalAmount, db);
+    finalAmount = reward.finalAmount;
+  } else if (finalAmount < 0) {
+    const debit = await getProtectedDebit(userId, Math.abs(finalAmount), db);
+    finalAmount = -debit.finalAmount;
+  }
 
   // 1. تعديل الرصيد في نفس الحقل wallet
   await users.updateOne(
     { userId: String(userId) }, // <:icons8correct1002:1415979896433278986> مو id
-    { $inc: { wallet: amount } }, // <:icons8correct1002:1415979896433278986> مو balance
+    { $inc: { wallet: finalAmount } }, // <:icons8correct1002:1415979896433278986> مو balance
     { upsert: true }
   );
 
   // 2. اضافة سجل كشف الحساب
   await transactions.insertOne({
     userId: String(userId),
-    amount,
+    amount: finalAmount,
     reason,
     timestamp: new Date()
   });
@@ -1309,6 +1350,24 @@ async function showBetInterface(inter, userId, gameId, balance, amount = 1000, f
 }
 
 
+const soloLossProtectionRefunds = new Map();
+
+async function maybeRefundSoloLoss(userId, gameId, bet, earned) {
+  const betAmount = Math.max(0, Number(bet) || 0);
+  const creditedAmount = Math.max(0, Number(earned) || 0);
+  const lossAmount = Math.max(0, betAmount - creditedAmount);
+  if (!lossAmount) return;
+
+  const key = `${userId}:${gameId}:${betAmount}:${lossAmount}`;
+  const now = Date.now();
+  const last = soloLossProtectionRefunds.get(key) || 0;
+  if (now - last < 1000) return;
+
+  soloLossProtectionRefunds.set(key, now);
+  setTimeout(() => soloLossProtectionRefunds.delete(key), 1500);
+  await applyLossProtectionRefund(userId, lossAmount, `حماية الخسارة - ${gameId}`);
+}
+
 //** <:icons8correct1002:1415979896433278986> دالة التحديث الموحد لاحصائيات الالعاب الفردية////////////////////////////////////////
 
 async function updateSoloStats(userId, gameId, bet, didWin, earned) {
@@ -1331,6 +1390,10 @@ async function updateSoloStats(userId, gameId, bet, didWin, earned) {
     update,
     { upsert: true }
   );
+
+  if (!didWin) {
+    await maybeRefundSoloLoss(userId, gameId, bet, earned).catch(() => {});
+  }
 }
 
 
@@ -3342,13 +3405,26 @@ const encodeId = (s) => String(s).replace(/_/g, "-");
 const decodeId = (s) => String(s).replace(/-/g, "_");
 
 // ادوات بناء الواجهة
-function buildLobbyRow(isFull = false) {
-  return new ActionRowBuilder().addComponents(
+function buildLobbyRow(isFull = false, lobby = null) {
+  const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("lobby_join").setLabel(" انضمام").setStyle(ButtonStyle.Secondary).setEmoji("1408077902859472966").setDisabled(isFull),
     new ButtonBuilder().setCustomId("lobby_bet").setLabel(" تغيير الرهان").setStyle(ButtonStyle.Secondary).setEmoji("1408077696688459836"),
     new ButtonBuilder().setCustomId("lobby_leave").setLabel("انسحاب").setStyle(ButtonStyle.Secondary).setEmoji("1408077754557136926"),
     new ButtonBuilder().setCustomId("lobby_start").setLabel(" ابدا اللعبة").setStyle(ButtonStyle.Secondary).setEmoji("1408080743971950653")
   );
+
+  if (lobby?.gameId === "multi_hide") {
+    const size = lobby.hideGridSize || 5;
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId("lobby_hide_toggle")
+        .setLabel(`${size}v${size}`)
+        .setStyle(ButtonStyle.Primary)
+        .setEmoji("1482274983689322606")
+    );
+  }
+
+  return row;
 }
 
 function buildPlayersLine(playersObj) {
@@ -3360,7 +3436,7 @@ async function updateLobbyMessage(i, lobby, gameInfo) {
   const maxPlayers = gameInfo.maxPlayers;
   const allPlayers = buildPlayersLine(lobby.players);
   const isFull = playerCount >= maxPlayers;
-  const row = buildLobbyRow(isFull);
+  const row = buildLobbyRow(isFull, lobby);
 
   const lobbyMessage = await i.channel.messages.fetch(lobby.messageId).catch(() => null);
   if (!lobbyMessage) return;
@@ -3395,14 +3471,15 @@ async function handleSelectMultiGame(i) {
     createdAt: Date.now(),
     status: "waiting",
     messageId: null,
-    timeout: null
+    timeout: null,
+    hideGridSize: gameId === "multi_hide" ? 5 : null
   };
   activeLobbies[i.channel.id] = lobby;
 
   const playerCount = 0;
   const maxPlayers = gameInfo.maxPlayers;
   const isFull = playerCount >= maxPlayers;
-  const row = buildLobbyRow(isFull);
+  const row = buildLobbyRow(isFull, lobby);
 
   const fs = require('fs');
   const imgPath = `./assets/lobbies/${gameId}.png`;
@@ -3537,7 +3614,7 @@ async function handleLobbyLeave(i) {
   if (!gameInfo) return;
 
   const isFull = Object.keys(lobby.players).length >= gameInfo.maxPlayers;
-  const row = buildLobbyRow(isFull);
+  const row = buildLobbyRow(isFull, lobby);
 
   const lobbyMessage = await i.channel.messages.fetch(lobby.messageId).catch(() => null);
   if (lobbyMessage) {
@@ -3620,6 +3697,22 @@ async function handleLobbyStart(i) {
   setTimeout(() => {
     i.deleteReply && i.deleteReply().catch(() => {});
   }, 5000);
+}
+
+async function handleLobbyHideToggle(i) {
+  if (i.customId !== "lobby_hide_toggle") return;
+  const lobby = activeLobbies[i.channel.id];
+  if (!lobby || lobby.status !== "waiting" || lobby.gameId !== "multi_hide") {
+    return i.reply({ content: "هذا الخيار متاح فقط في لوبي الاختباء.", ephemeral: true });
+  }
+  if (i.user.id !== lobby.hostId) {
+    return i.reply({ content: "صاحب اللوبي فقط يقدر يغير حجم الاختباء.", ephemeral: true });
+  }
+
+  lobby.hideGridSize = (lobby.hideGridSize || 5) === 5 ? 4 : 5;
+  const gameInfo = multiGamesMap[lobby.gameId];
+  await i.deferUpdate().catch(() => {});
+  return updateLobbyMessage(i, lobby, gameInfo);
 }
 
 /* مودال الانضمام عند رصيد < 1000 */
@@ -3760,11 +3853,11 @@ const multiGamesMap = {
     minPlayers: 2,
     maxPlayers: 10
   },
-  multi_bomb: {
-    start: startExplosionGame,
-    name: "عداد الانفجار",
+  multi_chairs: {
+    start: startChairsGame,
+    name: "الكراسي",
     minPlayers: 2,
-    maxPlayers: 99
+    maxPlayers: 23
   },
   multi_xo: { // <== أضف هذا البلوك
     start: startMultiplayerXO,
@@ -3802,6 +3895,10 @@ async function updateMultiplayerStats(userId, gameId, didWin, earned, lost) {
     update,
     { upsert: true }
   );
+
+  if (!didWin && Number(lost) > 0) {
+    await applyLossProtectionRefund(userId, lost, `حماية الخسارة - ${gameId}`).catch(() => {});
+  }
 }
 
 async function showMultiplayerStats(user, interaction) {
@@ -4487,6 +4584,7 @@ async function finishColorGame(channelId) {
           reason: "🎯 Color War - خسارة",
           timestamp: new Date()
         }).catch(() => {});
+        await applyLossProtectionRefund(player.id, player.bet, "حماية الخسارة - Color War").catch(() => {});
       }
     }
   } else {
@@ -4503,6 +4601,7 @@ async function finishColorGame(channelId) {
           reason: "🎯 Color War - خسارة",
           timestamp: new Date()
         }).catch(() => {});
+        await applyLossProtectionRefund(player.id, player.bet, "حماية الخسارة - Color War").catch(() => {});
       }
     }
   }
@@ -4537,6 +4636,7 @@ async function endColorGame(channelId, winnerId) {
           reason: "🎯 Color War - خسارة",
           timestamp: new Date()
         }).catch(() => {});
+        await applyLossProtectionRefund(p.id, p.bet, "حماية الخسارة - Color War").catch(() => {});
       }
     }
   }
@@ -5449,12 +5549,237 @@ async function handleBombPass(i) {
   return passBomb(i, targetId);
 }
 
+/******************************************
+ * 🪑 لعبة الكراسي الجماعية
+ ******************************************/
+const chairGames = {};
+
+function clearChairTimers(game) {
+  for (const key of ["lockTimer", "revealTimer", "afkTimer"]) {
+    try { if (game[key]) clearTimeout(game[key]); } catch {}
+    game[key] = null;
+  }
+}
+
+function buildChairRows(game) {
+  const rows = [];
+  const totalButtons = game.alive.length + 2;
+  for (let idx = 0; idx < totalButtons; idx++) {
+    if (idx % 5 === 0) rows.push(new ActionRowBuilder());
+
+    const isChair = game.chairs?.includes(idx);
+    const occupiedBy = Object.entries(game.seated || {}).find(([, seat]) => seat === idx)?.[0];
+    const disabled =
+      game.phase === "locked" ||
+      game.phase === "ended" ||
+      (game.phase === "seat" && (!isChair || Boolean(occupiedBy)));
+
+    const button = new ButtonBuilder()
+      .setCustomId(`chairs_${game.channelId}_${idx}`)
+      .setStyle(isChair ? ButtonStyle.Success : ButtonStyle.Secondary)
+      .setLabel(game.phase === "seat" && isChair ? "كرسي" : "-")
+      .setDisabled(disabled);
+
+    if (game.phase === "seat" && isChair) button.setEmoji("🪑");
+    if (occupiedBy) button.setLabel("محجوز").setEmoji("✅");
+
+    rows[rows.length - 1].addComponents(button);
+  }
+  return rows;
+}
+
+async function renderChairGame(channelId, statusText = "") {
+  const game = chairGames[channelId];
+  if (!game) return;
+
+  const phaseText = game.phase === "locked"
+    ? "الجولة بتبدأ الآن..."
+    : game.phase === "danger"
+      ? "انتظر ظهور الكراسي. الضغط الآن يطلعك من اللعبة."
+      : "اختار كرسي بسرعة!";
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🪑 الكراسي - الجولة ${game.round}`)
+    .setColor(game.phase === "seat" ? "#46c27a" : "#2f6f73")
+    .setDescription(`${statusText ? `${statusText}\n\n` : ""}${phaseText}\n\nالأحياء: ${game.alive.map(id => `<@${id}>`).join("، ")}`);
+
+  const payload = { embeds: [embed], components: buildChairRows(game), files: [] };
+  const channel = await client.channels.fetch(channelId);
+  if (!game.message) game.message = await channel.send(payload);
+  else await game.message.edit(payload).catch(() => {});
+}
+
+async function startChairsGame(channelId) {
+  const lobby = activeLobbies[channelId];
+  if (!lobby || lobby.status !== "waiting") return;
+
+  const players = Object.entries(lobby.players)
+    .filter(([_, p]) => p.ready)
+    .map(([id, p]) => ({ id, username: p.username, bet: p.bet }));
+
+  if (players.length < 2) return;
+  lobby.status = "playing";
+
+  const game = {
+    channelId,
+    players,
+    alive: players.map(p => p.id),
+    eliminated: [],
+    round: 0,
+    phase: "locked",
+    chairs: [],
+    seated: {},
+    message: null,
+    lockTimer: null,
+    revealTimer: null,
+    afkTimer: null,
+  };
+
+  chairGames[channelId] = game;
+  return startChairRound(channelId);
+}
+
+async function startChairRound(channelId, statusText = "") {
+  const game = chairGames[channelId];
+  if (!game) return;
+  clearChairTimers(game);
+
+  if (game.alive.length <= 1) return finishChairsGame(channelId, game.alive[0]);
+
+  game.round += 1;
+  game.phase = "locked";
+  game.chairs = [];
+  game.seated = {};
+  await renderChairGame(channelId, statusText);
+
+  game.lockTimer = setTimeout(async () => {
+    const current = chairGames[channelId];
+    if (!current) return;
+    current.phase = "danger";
+    await renderChairGame(channelId);
+
+    const revealAfter = 3000 + Math.floor(Math.random() * 4000);
+    current.revealTimer = setTimeout(() => revealChairs(channelId), revealAfter);
+  }, 1500);
+}
+
+async function revealChairs(channelId) {
+  const game = chairGames[channelId];
+  if (!game) return;
+
+  game.phase = "seat";
+  const totalButtons = game.alive.length + 2;
+  const allIndexes = Array.from({ length: totalButtons }, (_, idx) => idx).sort(() => Math.random() - 0.5);
+  game.chairs = allIndexes.slice(0, Math.max(1, game.alive.length - 1));
+  game.seated = {};
+  await renderChairGame(channelId);
+
+  game.afkTimer = setTimeout(() => finishChairRound(channelId, "⏳ انتهى الوقت، اللي ما جلس طلع من الجولة."), 8000);
+}
+
+async function handleChairsButtons(i) {
+  if (!i.isButton || !i.isButton()) return;
+  const [, channelId, idxRaw] = i.customId.split("_");
+  const idx = Number(idxRaw);
+  const game = chairGames[channelId];
+  if (!game) return i.reply({ content: "اللعبة انتهت أو غير موجودة.", ephemeral: true }).catch(() => {});
+  if (i.channel.id !== channelId) return;
+  if (!game.alive.includes(i.user.id)) {
+    return i.reply({ content: "أنت خارج الجولة.", ephemeral: true }).catch(() => {});
+  }
+
+  await i.deferUpdate().catch(() => {});
+
+  if (game.phase === "danger") {
+    game.alive = game.alive.filter(id => id !== i.user.id);
+    game.eliminated.push(i.user.id);
+    clearChairTimers(game);
+    const text = `❌ <@${i.user.id}> استعجل وضغط قبل ظهور الكراسي وطلع من الجولة.`;
+    if (game.alive.length <= 1) return finishChairsGame(channelId, game.alive[0]);
+    return startChairRound(channelId, text);
+  }
+
+  if (game.phase !== "seat") return;
+  if (!game.chairs.includes(idx)) return;
+  if (game.seated[i.user.id] !== undefined) return;
+  if (Object.values(game.seated).includes(idx)) return;
+
+  game.seated[i.user.id] = idx;
+  await renderChairGame(channelId, `✅ <@${i.user.id}> جلس على كرسي.`);
+
+  if (Object.keys(game.seated).length >= game.chairs.length) {
+    return finishChairRound(channelId, "اكتملت الكراسي.");
+  }
+}
+
+async function finishChairRound(channelId, reason) {
+  const game = chairGames[channelId];
+  if (!game) return;
+  clearChairTimers(game);
+
+  const seatedIds = new Set(Object.keys(game.seated || {}));
+  const eliminatedThisRound = game.alive.filter(id => !seatedIds.has(id));
+  for (const id of eliminatedThisRound) {
+    if (!game.eliminated.includes(id)) game.eliminated.push(id);
+  }
+  game.alive = game.alive.filter(id => seatedIds.has(id));
+
+  if (game.alive.length <= 1) return finishChairsGame(channelId, game.alive[0]);
+
+  const text = `${reason}\nخرج من الجولة: ${eliminatedThisRound.map(id => `<@${id}>`).join("، ") || "لا أحد"}`;
+  return setTimeout(() => startChairRound(channelId, text), 1800);
+}
+
+async function finishChairsGame(channelId, winnerId) {
+  const game = chairGames[channelId];
+  if (!game) return;
+  clearChairTimers(game);
+
+  const lobby = activeLobbies[channelId];
+  if (!winnerId || !lobby) {
+    for (const p of game.players) await addBalance(p.id, lobby?.players[p.id]?.bet || p.bet || 0).catch(() => {});
+    await game.message?.edit({ content: "انتهت لعبة الكراسي بدون فائز وتم استرجاع الرهانات.", embeds: [], components: [] }).catch(() => {});
+    delete chairGames[channelId];
+    return;
+  }
+
+  const winner = game.players.find(p => p.id === winnerId);
+  const totalPot = Object.values(lobby.players).reduce((sum, p) => sum + (p.bet || 0), 0);
+  const winnerBet = lobby.players[winnerId]?.bet || winner?.bet || 0;
+  const payout = Math.max(winnerBet * 2, totalPot);
+
+  await updateBalanceWithLog(db, winnerId, payout, "🪑 الكراسي - فوز").catch(() => {});
+  await addBalance(winnerId, winnerBet).catch(() => {});
+  await updateMultiplayerStats(winnerId, "multi_chairs", true, payout, 0).catch(() => {});
+
+  for (const p of game.players) {
+    if (p.id === winnerId) continue;
+    const loserBet = lobby.players[p.id]?.bet || p.bet || 0;
+    await db.collection("transactions").insertOne({
+      userId: p.id,
+      amount: -loserBet,
+      reason: "🪑 الكراسي - خسارة",
+      timestamp: new Date()
+    }).catch(() => {});
+    await updateMultiplayerStats(p.id, "multi_chairs", false, 0, loserBet).catch(() => {});
+  }
+
+  game.phase = "ended";
+  const embed = new EmbedBuilder()
+    .setTitle("🏆 فائز الكراسي")
+    .setColor("Green")
+    .setDescription(`الفائز هو <@${winnerId}> وربح **${payout.toLocaleString("en-US")}** ريال.`);
+  await game.message?.edit({ embeds: [embed], components: [] }).catch(() => {});
+  delete chairGames[channelId];
+}
+
 
 /******************************************
  * 🎲 روليت الاقصاء الجماعية (مع GIF) — متوافقة مع الراوتر/الهلبِر
  ******************************************/
 
 const GIFEncoder = require("gif-encoder-2");
+const { assert } = require("console");
 
 const rouletteGames = {}; // channelId -> game
 const wheelColors = ["#8FD6FF", "#91B8F5", "#A78EEB", "#CBA0E6"]
@@ -5560,7 +5885,7 @@ async function eliminateInactive(channelId) {
 
   game.eliminated.push(game.currentPlayer);
   const user = game.players.find(p => p.id === game.currentPlayer);
-  game.log.push(`⏰ لم يتخذ ${member.displayName} قرارًا وتم اقصاؤه تلقائيًا.`);
+  game.log.push(`⏰ لم يتخذ ${user?.username || "اللاعب"} قرارًا وتم اقصاؤه تلقائيًا.`);
   await renderRouletteGame(channelId);
 
   const remaining = game.players.filter(p => !game.eliminated.includes(p.id));
@@ -5697,73 +6022,111 @@ async function renderRouletteGif(game, duration = 3000) {
   
   return encoder.out.getData();
 }
-/* صورة النتيجة بين الجيف والازرار */
+function truncateCanvasText(ctx, text, maxWidth) {
+  let value = String(text || "");
+  if (ctx.measureText(value).width <= maxWidth) return value;
+  while (value.length > 1 && ctx.measureText(`${value}...`).width > maxWidth) {
+    value = value.slice(0, -1);
+  }
+  return `${value}...`;
+}
+
+/* صورة الدور الثابتة */
 async function renderRouletteResult(game, winnerId) {
-  const width = 1152, height = 768;
+  const width = 900, height = 760;
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext("2d");
 
   const alivePlayers = game.players.filter(p => !game.eliminated.includes(p.id));
   const angleStep = (2 * Math.PI) / alivePlayers.length;
+  const currentIndex = Math.max(0, alivePlayers.findIndex(p => p.id === winnerId));
+  const rotation = -(currentIndex * angleStep + angleStep / 2);
+  const centerX = width / 2;
+  const centerY = height / 2 + 8;
+  const radius = 310;
 
-  ctx.translate(width / 2, height / 2);
+  const bg = ctx.createLinearGradient(0, 0, width, height);
+  bg.addColorStop(0, "#081111");
+  bg.addColorStop(1, "#152b2c");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.save();
+  ctx.translate(centerX, centerY);
 
   // القطاعات
   alivePlayers.forEach((p, idx) => {
-    const startAngle = idx * angleStep;
+    const startAngle = rotation + idx * angleStep;
     const endAngle = startAngle + angleStep;
 
     ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.arc(0, 0, 300, startAngle, endAngle);
+    ctx.arc(0, 0, radius, startAngle, endAngle);
     ctx.closePath();
-    ctx.fillStyle = wheelColors[idx % wheelColors.length];
+    ctx.fillStyle = idx % 2 === 0 ? "#5f7d79" : "#304f4d";
     ctx.fill();
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = "#020707";
+    ctx.stroke();
   });
 
-  // دائرة وسط فاضية
-  ctx.globalCompositeOperation = "destination-out";
   ctx.beginPath();
-  ctx.arc(0, 0, 120, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalCompositeOperation = "source-over";
+  ctx.arc(0, 0, radius, 0, Math.PI * 2);
+  ctx.lineWidth = 10;
+  ctx.strokeStyle = "#020707";
+  ctx.stroke();
 
   // الاسماء
-  ctx.font = "28px PressStart2P";
-  ctx.fillStyle = "black";
+  ctx.font = "bold 23px Cairo";
+  ctx.fillStyle = "#f6fbf8";
   ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
   alivePlayers.forEach((p, idx) => {
-    const angle = idx * angleStep + angleStep / 2;
-    const x = Math.cos(angle) * 200;
-    const y = Math.sin(angle) * 200;
+    const angle = rotation + idx * angleStep + angleStep / 2;
+    const x = Math.cos(angle) * (radius * 0.62);
+    const y = Math.sin(angle) * (radius * 0.62);
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(angle + Math.PI / 2);
-    ctx.fillText(p.username, 0, 0);
+    ctx.fillText(truncateCanvasText(ctx, p.username, 150), 0, 0);
     ctx.restore();
   });
 
-  // صورة اللاعب "المختار" (هو currentPlayer) بالوسط
-  const avatar = await loadUserAvatar(await client.users.fetch(winnerId));
-  drawCircularImage(ctx, avatar, 0, 0, 120);
-
-  // سهم يشير لقطاع اللاعب "المختار"
-  const winnerIndex = alivePlayers.findIndex(p => p.id === winnerId);
-  const winnerAngle = winnerIndex * angleStep + angleStep / 2;
-  const arrowX = Math.cos(winnerAngle) * 330;
-  const arrowY = Math.sin(winnerAngle) * 330;
-
+  // سهم أبيض يشير إلى قطاع صاحب الدور
   ctx.save();
-  ctx.translate(arrowX, arrowY);
-  ctx.rotate(winnerAngle - Math.PI / 2);
-  ctx.fillStyle = "white";
+  ctx.translate(94, 0);
+  ctx.fillStyle = "#ffffff";
   ctx.beginPath();
-  ctx.moveTo(0, -20);
-  ctx.lineTo(12, 10);
-  ctx.lineTo(-12, 10);
+  ctx.moveTo(0, -24);
+  ctx.lineTo(58, 0);
+  ctx.lineTo(0, 24);
   ctx.closePath();
   ctx.fill();
   ctx.restore();
+
+  // صورة اللاعب صاحب الدور بالوسط
+  ctx.beginPath();
+  ctx.arc(0, 0, 96, 0, Math.PI * 2);
+  ctx.fillStyle = "#f3f5f2";
+  ctx.fill();
+  try {
+    const avatar = await loadUserAvatar(await client.users.fetch(winnerId));
+    drawCircularImage(ctx, avatar, 0, 0, 174);
+  } catch {}
+  ctx.beginPath();
+  ctx.arc(0, 0, 91, 0, Math.PI * 2);
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = "#ffffff";
+  ctx.stroke();
+  ctx.restore();
+
+  const current = alivePlayers[currentIndex];
+  ctx.font = "bold 34px Cairo";
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#f6fbf8";
+  ctx.fillText("الدور على", centerX, 56);
+  ctx.font = "bold 42px Cairo";
+  ctx.fillText(truncateCanvasText(ctx, current?.username || "", 620), centerX, 105);
 
   return new AttachmentBuilder(await canvas.encode("png"), { name: "roulette_result.png" });
 }
@@ -5807,7 +6170,15 @@ async function renderWinnerBackground(game, winnerId) {
 
   return new AttachmentBuilder(await canvas.encode("png"), { name: "winner.png" });
 }
-/* عرض اللعبة (GIF -> نتيجة + ازرار) */
+function chunkButtons(buttons, size = 5, maxRows = 4) {
+  const rows = [];
+  for (let i = 0; i < buttons.length && rows.length < maxRows; i += size) {
+    rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + size)));
+  }
+  return rows;
+}
+
+/* عرض اللعبة بصورة ثابتة + ازرار */
 async function renderRouletteGame(channelId) {
   const game = rouletteGames[channelId];
   if (!game) return;
@@ -5827,52 +6198,43 @@ async function renderRouletteGame(channelId) {
     return;
   }
 
-  // GIF دوران
-  const gifBuffer = await renderRouletteGif(game);
+  const resultImg = await renderRouletteResult(game, game.currentPlayer);
+  const targetButtons = game.players
+    .filter(p => !game.eliminated.includes(p.id) && p.id !== game.currentPlayer)
+    .slice(0, 20)
+    .map(p => new ButtonBuilder()
+      .setCustomId(`roulette_${p.id}`)
+      .setLabel(String(p.username || "لاعب").slice(0, 80))
+      .setEmoji("1407422287652720750")
+      .setStyle(ButtonStyle.Secondary));
+
+  const targetRows = chunkButtons(targetButtons, 5, 4);
+  const controlRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("roulette_random")
+      .setLabel(" عشوائي")
+      .setEmoji("1408078698355232809")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(aliveCount === 2),
+    new ButtonBuilder()
+      .setCustomId("roulette_skip")
+      .setLabel(" انسحاب")
+      .setEmoji("1416383140338991244")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(aliveCount === 1)
+  );
+
+  const payload = {
+    content: `🎯 الدور على <@${game.currentPlayer}>`,
+    files: [resultImg],
+    components: [...targetRows, controlRow].slice(0, 5),
+  };
+
   if (!game.gameMessage) {
-    game.gameMessage = await channel.send({
-      files: [new AttachmentBuilder(gifBuffer, { name: "roulette.gif" })]
-    });
+    game.gameMessage = await channel.send(payload);
   } else {
-    await game.gameMessage.edit({
-      files: [new AttachmentBuilder(gifBuffer, { name: "roulette.gif" })],
-      components: []
-    }).catch(() => {});
+    await game.gameMessage.edit(payload).catch(() => {});
   }
-
-  // بعد 3 ثواني: صورة النتيجة + الازرار
-  setTimeout(async () => {
-    const resultImg = await renderRouletteResult(game, game.currentPlayer);
-
-    const row1 = new ActionRowBuilder().addComponents(
-      game.players
-        .filter(p => !game.eliminated.includes(p.id) && p.id !== game.currentPlayer)
-        .map(p => new ButtonBuilder()
-          .setCustomId(`roulette_${p.id}`)
-          .setLabel(p.username)
-          .setEmoji("1407422287652720750")
-          .setStyle(ButtonStyle.Secondary))
-    );
-
-    const aliveCount2 = game.players.filter(p => !game.eliminated.includes(p.id)).length;
-
-    const row2 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("roulette_random")
-        .setLabel(" عشوائي")
-        .setEmoji("1408078698355232809")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(aliveCount2 === 2),
-      new ButtonBuilder()
-        .setCustomId("roulette_skip")
-        .setLabel(" انسحاب")
-        .setEmoji("1416383140338991244")
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(aliveCount2 === 1)
-    );
-
-    game.gameMessage.edit({ files: [resultImg], components: [row1, row2] }).catch(() => {});
-  }, 3000);
 }
 
 /* تنظيف مؤقّت الدور */
@@ -6013,13 +6375,13 @@ async function handleMultiXOButtons(i) {
 
 const hideGames = {}; // channelId -> game state
 
-// بناء أزرار اللعبة (5x5)
-function buildHideGrid(channelId, phase, revealedSpots = []) {
+// بناء أزرار اللعبة (4x4 أو 5x5)
+function buildHideGrid(channelId, phase, revealedSpots = [], gridSize = 5) {
   const rows = [];
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < gridSize; i++) {
     const row = new ActionRowBuilder();
-    for (let j = 0; j < 5; j++) {
-      const idx = i * 5 + j;
+    for (let j = 0; j < gridSize; j++) {
+      const idx = i * gridSize + j;
       const btn = new ButtonBuilder()
         .setCustomId(`hide_${phase}_${channelId}_${idx}`)
         .setStyle(ButtonStyle.Secondary);
@@ -6056,6 +6418,7 @@ async function startHideGame(channelId) {
     phase: "hide", // 'hide' or 'seek'
     currentPlayer: null, // من عليه الدور الآن
     revealed: [], // الأزرار اللي انفتحت
+    gridSize: lobby.hideGridSize || 5,
     msg: null,
     timer: null
   };
@@ -6067,7 +6430,7 @@ async function startHideGame(channelId) {
     .setColor("#2b2d31")
     .setDescription("معاكم **60 ثانية**! الكل يضغط على زر يختبئ وراه (عادي أكثر من شخص بنفس الزر).\n\n⚠️ اللي ما يختبئ راح ينطرد من الجولة.");
 
-  const components = buildHideGrid(channelId, "hide");
+  const components = buildHideGrid(channelId, "hide", [], game.gridSize);
 
   const channel = await client.channels.fetch(channelId);
   game.msg = await channel.send({ embeds: [embed], components });
@@ -6113,7 +6476,7 @@ async function transitionToSeekPhase(channelId) {
     .setColor("#ffcc00")
     .setDescription(`انتهى وقت التخفي! وبدأ البحث.\n\n🎯 **الدور الآن على:** <@${game.currentPlayer}>\nاختار زر واحد تفتحه عشان تصيد الباقين!`);
 
-  const components = buildHideGrid(channelId, "seek");
+  const components = buildHideGrid(channelId, "seek", [], game.gridSize);
   await game.msg.edit({ embeds: [embed], components }).catch(() => {});
 
   // مؤقت الدور (20 ثانية) إذا ما لعب يطرد
@@ -6160,7 +6523,7 @@ function nextTurn(channelId, previousActionText) {
     .setColor("#ffcc00")
     .setDescription(`${previousActionText}\n\n🎯 **الدور الآن على:** <@${game.currentPlayer}>\nاختار زر واحد تفتحه!`);
 
-  const components = buildHideGrid(channelId, "seek", game.revealed);
+  const components = buildHideGrid(channelId, "seek", game.revealed, game.gridSize);
   game.msg.edit({ embeds: [embed], components }).catch(() => {});
 
   game.timer = setTimeout(() => handleTurnTimeout(channelId), 20000);
@@ -6297,10 +6660,11 @@ async function finishHideGame(channelId, lastActionText, lastShooterId) {
 
   // إظهار أماكن كل اللاعبين النهائية في الأزرار
   const finalRows = [];
-  for (let i = 0; i < 5; i++) {
+  const gridSize = game.gridSize || 5;
+  for (let i = 0; i < gridSize; i++) {
     const row = new ActionRowBuilder();
-    for (let j = 0; j < 5; j++) {
-      const idx = i * 5 + j;
+    for (let j = 0; j < gridSize; j++) {
+      const idx = i * gridSize + j;
       const btn = new ButtonBuilder().setCustomId(`end_${idx}`).setDisabled(true);
       
       const playersHere = Object.entries(game.hidingSpots).filter(([_, spot]) => spot === idx).map(([id]) => id);
@@ -6530,7 +6894,12 @@ const image = new AttachmentBuilder(
       .setCustomId("gamble_multi")
       .setLabel(" الالعاب الجماعية")
       .setStyle(ButtonStyle.Secondary)
-      .setEmoji("1407423118993002668")
+      .setEmoji("1407423118993002668"),
+    new ButtonBuilder()
+      .setCustomId("gamble_minigames")
+      .setLabel(" ميني قيمز")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji("🎮")
   );
 
   await msg.channel.send({
@@ -6540,29 +6909,33 @@ const image = new AttachmentBuilder(
   });
 }
 
+async function handleGambleMinigames(i) {
+  return handleMinigamesCommand(i);
+}
+
 // عرض قائمة الالعاب (فردي/جماعي)
 async function handleGambleCategory(i) {
   const isSolo = i.customId === "gamble_solo";
 
   const soloGames = [
-    { label: " روليت", value: "soloroulette", emoji: { id: "1407429268350439535", animated: true } },
-    { label: " مكينة السلوت", value: "soloslot", emoji: { id: "1407428069844848741", animated: true } },
-    { label: " صندوق الحظ", value: "solomystery", emoji: { id: "1407431521631076412", animated: true } },
     { label: " تحدي الاوراق", value: "solobus", emoji: { id: "1407431501792149546", animated: true } },
     { label: " بلاك جاك", value: "blackjack", emoji: { id: "1407431511564619797", animated: true } },
+    { label: " روليت", value: "soloroulette", emoji: { id: "1407429268350439535", animated: true } },
+    { label: " اكس او", value: "soloxo", emoji: { id: "1481411627738988674" } }, // <== أضف هذا السطر
+    { label: " مكينة السلوت", value: "soloslot", emoji: { id: "1407428069844848741", animated: true } },
+    { label: " صندوق الحظ", value: "solomystery", emoji: { id: "1407431521631076412", animated: true } },
     { label: " باكشوت", value: "buckshot", emoji: { id: "1407431387606290599", animated: true } },
-    { label: " اكس او", value: "soloxo", emoji: { id: "1481411627738988674" } } // <== أضف هذا السطر
   ];
 
   const multiGames = [
+    { label: "الاختباء", value: "multi_hide", emoji: { id: "1482274983689322606" } }, // <== أضف هذا السطر
+    { label: " الكراسي", value: "multi_chairs", emoji: "🪑" },
     { label: " بلاك جاك", value: "multi_blackjack", emoji: { id: "1407431511564619797", animated: true } },
-    { label: " باكشوت ", value: "multi_buckshot", emoji: { id: "1407431387606290599", animated: true } },
+    { label: " اكس او", value: "multi_xo", emoji: { id: "1481411627738988674" } },
     { label: " روليت ", value: "multi_kicker", emoji: { id: "1407429268350439535", animated: true } },
+    { label: " باكشوت ", value: "multi_buckshot", emoji: { id: "1407431387606290599", animated: true } },
     { label: " لعبة الالوان", value: "multi_colorwar", emoji: { id: "1408209314287452292", animated: true } },
     { label: "الغرفة المؤقتة", value: "multi_time", emoji: { id: "1407436102033211562", animated: true } },
-    { label: " القنبلة", value: "multi_bomb", emoji: { id: "1407436086329872488", animated: true } },
-    { label: " اكس او", value: "multi_xo", emoji: { id: "1481411627738988674" } },
-    { label: "الاختباء", value: "multi_hide", emoji: { id: "1482274983689322606" } } // <== أضف هذا السطر
 
   ];
 
@@ -6605,7 +6978,12 @@ async function handleBackToMain(i) {
       .setCustomId("gamble_multi")
       .setLabel(" الالعاب الجماعية")
       .setStyle(ButtonStyle.Secondary)
-      .setEmoji("1407423118993002668")
+      .setEmoji("1407423118993002668"),
+    new ButtonBuilder()
+      .setCustomId("gamble_minigames")
+      .setLabel(" ميني قيمز")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji("🎮")
   );
 
   return i.update({
@@ -7025,25 +7403,43 @@ async function handleWalletMessage(msg) {
 // 2. نظام التحويل التفاعلي المدمج (محمي + أزرار الاختصار)
 // ==========================================
 const transferState = new Map();
+const TRANSFER_TARGET_ROLE_ID = "1269522774515257445";
+const TRANSFER_PAGE_SIZE = 25;
 
-function buildTransferControls(options, ownerId) {
+function buildTransferControls(options, ownerId, page = 0, totalPages = 1) {
+  const selectableOptions = options.length
+    ? options
+    : [{ label: "لا يوجد أعضاء", value: "none", description: "لا يوجد مستفيدون متاحون" }];
+
   const select = new StringSelectMenuBuilder()
-    .setCustomId(`bank_transfer_select_${ownerId}`)
+    .setCustomId(`bank_transfer_select_${ownerId}_${page}`)
     .setPlaceholder("اختر المستفيد")
-    .addOptions(options);
+    .setMinValues(1)
+    .setMaxValues(Math.min(25, selectableOptions.length))
+    .addOptions(selectableOptions);
 
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`bank_transfer_key_1_${ownerId}`).setLabel("1").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`bank_transfer_key_2_${ownerId}`).setLabel("2").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`bank_transfer_key_3_${ownerId}`).setLabel("3").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`bank_transfer_key_reset_${ownerId}`).setEmoji("1419525663638950019").setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`bank_transfer_key_reset_${ownerId}`).setEmoji("1419525663638950019").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`bank_transfer_page_prev_${ownerId}_${page}`)
+      .setLabel("السابق")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page <= 0)
   );
 
   const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`bank_transfer_key_4_${ownerId}`).setLabel("4").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`bank_transfer_key_5_${ownerId}`).setLabel("5").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`bank_transfer_key_6_${ownerId}`).setLabel("6").setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`bank_transfer_key_quarter_${ownerId}`).setEmoji("1419791397141090385").setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`bank_transfer_key_quarter_${ownerId}`).setEmoji("1419791397141090385").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`bank_transfer_page_next_${ownerId}_${page}`)
+      .setLabel("التالي")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(page >= totalPages - 1)
   );
 
   const row3 = new ActionRowBuilder().addComponents(
@@ -7063,19 +7459,56 @@ function buildTransferControls(options, ownerId) {
   return [new ActionRowBuilder().addComponents(select), row1, row2, row3, rowCtrl];
 }
 
-const STATIC_USERS = [
-  { name: "نايل", id: "532264405476573224" },
-  { name: "لافندر", id: "545613574874071063" },
-  { name: "شكشوكة", id: "1106288355228004372" },
-  { name: "وحيدا", id: "696302530937880666" },
-  { name: "سويدة", id: "1270057947334185053" },
-  { name: "فيصل", id: "955228953113681970" },
-  { name: "كركم", id: "1097381729007849554" },
-  { name: "جبنة", id: "359427305979772938" },
-  { name: "ريان", id: "1374244101205131274" },
-  { name: "بريسلا", id: "830599978756997130" },
-  { name: "خالد", id: "734187812236034108" }
-];
+function cleanDiscordLabel(value, fallback = "عضو") {
+  const cleaned = String(value || fallback)
+    .replace(/[\r\n\t]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (cleaned || fallback).slice(0, 90);
+}
+
+async function getTransferTargets(guild, senderId) {
+  await guild.members.fetch().catch(() => {});
+  return [...guild.members.cache.values()]
+    .filter((member) =>
+      !member.user?.bot &&
+      member.id !== senderId &&
+      member.roles.cache.has(TRANSFER_TARGET_ROLE_ID)
+    )
+    .sort((a, b) => a.displayName.localeCompare(b.displayName, "ar"))
+    .map((member) => ({
+      id: member.id,
+      name: cleanDiscordLabel(member.displayName || member.user?.username, member.id),
+      username: cleanDiscordLabel(member.user?.username, member.id),
+    }));
+}
+
+function getTransferPageOptions(members, page) {
+  const start = page * TRANSFER_PAGE_SIZE;
+  return members.slice(start, start + TRANSFER_PAGE_SIZE).map((member) => ({
+    label: member.name,
+    description: `@${member.username} • ${member.id}`.slice(0, 100),
+    value: member.id,
+  }));
+}
+
+function formatSelectedTransferTargets(members, targetIds) {
+  const names = targetIds
+    .map((id) => members.find((member) => member.id === id))
+    .filter(Boolean)
+    .map((member) => `<@${member.id}>`);
+
+  if (!names.length) return "لم يتم الاختيار";
+  if (names.length <= 8) return names.join("، ");
+  return `${names.slice(0, 8).join("، ")} و ${names.length - 8} آخرين`;
+}
+
+function buildTransferComponentsFromState(ownerId, st) {
+  const totalPages = Math.max(1, Math.ceil((st.members?.length || 0) / TRANSFER_PAGE_SIZE));
+  const page = Math.min(Math.max(st.page || 0, 0), totalPages - 1);
+  st.page = page;
+  return buildTransferControls(getTransferPageOptions(st.members || [], page), ownerId, page, totalPages);
+}
 
 async function handleTransferMessage(msg) {
   const content = msg.content.trim();
@@ -7083,6 +7516,8 @@ async function handleTransferMessage(msg) {
 
   const senderId = msg.author.id;
   const walletBalance = await getBalance(senderId);
+  if (!msg.guild) return msg.reply("❌ أمر التحويل يعمل داخل السيرفر فقط.");
+  const members = await getTransferTargets(msg.guild, senderId);
 
   const embed = new EmbedBuilder()
     .setTitle(`🏦 بنك ${msg.author.username}`)
@@ -7093,44 +7528,61 @@ async function handleTransferMessage(msg) {
       { name: "المستفيد", value: "لم يتم الاختيار", inline: true }
     );
 
-  const options = STATIC_USERS
-    .filter(m => m.id !== senderId)
-    .map(m => ({ 
-      label: m.name, 
-      description: `ID: ${m.id}`, 
-      value: m.id 
-    }));
-
-  if (options.length === 0) options.push({ label: "لا يوجد أعضاء", value: "none" });
-
-  const controls = buildTransferControls(options, senderId);
-  transferState.set(senderId, { targetId: null, amount: "" });
+  const state = { targetIds: [], amount: "", members, page: 0 };
+  const controls = buildTransferComponentsFromState(senderId, state);
+  transferState.set(senderId, state);
 
   return await msg.reply({ embeds: [embed], components: controls });
 }
 
 async function handleTransferSelectUser(i) {
-  const ownerId = i.customId.replace("bank_transfer_select_", "");
+  const parts = i.customId.split("_");
+  const ownerId = parts[3];
   
   if (i.user.id !== ownerId) {
     return i.reply({ content: "❌ عذراً، هذه القائمة خاصة بصاحب التحويل فقط!", ephemeral: true });
   }
 
   const userId = i.user.id;
-  const st = transferState.get(userId) || { targetId: null, amount: "" };
+  const st = transferState.get(userId) || { targetIds: [], amount: "", members: [], page: 0 };
   
-  st.targetId = i.values[0];
+  const selected = i.values.filter((value) => value !== "none");
+  const existingOnOtherPages = (st.targetIds || []).filter((id) => {
+    const memberIndex = (st.members || []).findIndex((member) => member.id === id);
+    return memberIndex < 0 || Math.floor(memberIndex / TRANSFER_PAGE_SIZE) !== (st.page || 0);
+  });
+  st.targetIds = [...new Set([...existingOnOtherPages, ...selected])];
   transferState.set(userId, st);
-  
-  const staticUser = STATIC_USERS.find(u => u.id === st.targetId);
-  const name = staticUser ? staticUser.name : "مستخدم غير معروف";
 
   const embed = EmbedBuilder.from(i.message.embeds[0]);
   const fields = embed.data.fields;
   const idx = fields.findIndex(f => f.name === "المستفيد");
-  if (idx >= 0) fields[idx].value = `<@${st.targetId}> — **${name}**`;
+  if (idx >= 0) fields[idx].value = formatSelectedTransferTargets(st.members || [], st.targetIds);
 
   return await i.update({ embeds: [embed] }).catch(() => {});
+}
+
+async function handleTransferPageButtons(i) {
+  const parts = i.customId.split("_");
+  const direction = parts[3];
+  const ownerId = parts[4];
+
+  if (i.user.id !== ownerId) {
+    return i.reply({ content: "❌ عذراً، هذه الأزرار خاصة بصاحب التحويل فقط!", ephemeral: true });
+  }
+
+  const st = transferState.get(ownerId);
+  if (!st) return i.reply({ content: "انتهت جلسة التحويل، اكتب تحويل من جديد.", ephemeral: true });
+
+  const totalPages = Math.max(1, Math.ceil((st.members?.length || 0) / TRANSFER_PAGE_SIZE));
+  st.page = Math.min(
+    Math.max((st.page || 0) + (direction === "next" ? 1 : -1), 0),
+    totalPages - 1
+  );
+  transferState.set(ownerId, st);
+
+  const embed = EmbedBuilder.from(i.message.embeds[0]);
+  return i.update({ embeds: [embed], components: buildTransferComponentsFromState(ownerId, st) }).catch(() => {});
 }
 
 async function handleTransferKeys(i) {
@@ -7143,7 +7595,7 @@ async function handleTransferKeys(i) {
   }
 
   const userId = i.user.id;
-  const st = transferState.get(userId) || { targetId: null, amount: "" };
+  const st = transferState.get(userId) || { targetIds: [], amount: "", members: [], page: 0 };
   const senderBalance = await getBalance(userId);
 
   if (keyAction === "del") {
@@ -7161,18 +7613,26 @@ async function handleTransferKeys(i) {
   } 
   else if (keyAction === "confirm") {
     const amount = parseInt(st.amount || "0");
-    if (!st.targetId || st.targetId === "none") return i.reply({ content: "❌ اختر مستفيداً أولاً من القائمة.", ephemeral: true });
+    const targetIds = [...new Set((st.targetIds || []).filter((id) => id && id !== "none" && id !== userId))];
+    const totalAmount = amount * targetIds.length;
+    if (!targetIds.length) return i.reply({ content: "❌ اختر مستفيداً واحداً على الأقل من القائمة.", ephemeral: true });
     if (!amount || amount <= 0) return i.reply({ content: "❌ أدخل مبلغاً صحيحاً.", ephemeral: true });
-    if (senderBalance < amount) return i.reply({ content: "❌ رصيدك غير كافٍ.", ephemeral: true });
+    if (senderBalance < totalAmount) return i.reply({ content: `❌ رصيدك غير كافٍ. المطلوب: ${totalAmount.toLocaleString("en-US")} ريال.`, ephemeral: true });
 
-    await subtractBalance(userId, amount);
-    await addBalance(st.targetId, amount);
+    await subtractBalance(userId, totalAmount);
+    for (const targetId of targetIds) {
+      await addBalance(targetId, amount);
+    }
 
     try {
-      await db.collection("transactions").insertMany([
-        { userId: String(userId), amount: -amount, reason: `تحويل إلى <@${st.targetId}>`, timestamp: new Date() },
-        { userId: String(st.targetId), amount: amount, reason: `تحويل من <@${userId}>`, timestamp: new Date() }
-      ]);
+      const docs = [];
+      for (const targetId of targetIds) {
+        docs.push(
+          { userId: String(userId), amount: -amount, reason: `تحويل إلى <@${targetId}>`, timestamp: new Date() },
+          { userId: String(targetId), amount: amount, reason: `تحويل من <@${userId}>`, timestamp: new Date() }
+        );
+      }
+      await db.collection("transactions").insertMany(docs);
     } catch(e) { console.error("Database log error:", e); }
 
     transferState.delete(userId); 
@@ -7197,7 +7657,9 @@ async function handleTransferKeys(i) {
       const textColor = "#3eb8a1";
 
       // بدون كلمة ريال
-      const amountText = [`${amount.toLocaleString("en-US")}`];
+      const amountText = targetIds.length > 1
+        ? [`${amount.toLocaleString("en-US")} لكل مستفيد`, `الإجمالي ${totalAmount.toLocaleString("en-US")}`]
+        : [`${amount.toLocaleString("en-US")}`];
       drawSmartBoxText(ctx, amountText, boxes.amount, textColor);
 
       const senderName = i.user.displayName || i.user.username;
@@ -7206,9 +7668,13 @@ async function handleTransferKeys(i) {
       const senderText = [`${cleanSenderName}`, `${userId}`];
       drawSmartBoxText(ctx, senderText, boxes.sender, textColor);
 
-      const staticUser = STATIC_USERS.find(u => u.id === st.targetId);
-      let receiverName = staticUser ? staticUser.name : "مستخدم";
-      const receiverText = [`${receiverName}`, `${st.targetId}`];
+      const receiverLines = targetIds.map((targetId) => {
+        const member = (st.members || []).find((m) => m.id === targetId);
+        return `${member?.name || "مستخدم"} - ${targetId}`;
+      });
+      const receiverText = receiverLines.length <= 4
+        ? receiverLines
+        : [...receiverLines.slice(0, 4), `+${receiverLines.length - 4} مستفيدين`];
       drawSmartBoxText(ctx, receiverText, boxes.receiver, textColor);
 
       const randomReason = TRANSFER_REASONS[Math.floor(Math.random() * TRANSFER_REASONS.length)];
@@ -7224,7 +7690,7 @@ async function handleTransferKeys(i) {
       return await i.editReply({ content: "✅ **تم التحويل بنجاح!**", files: [attachment] }).catch(() => {});
     } catch (err) {
       console.error(err);
-      return await i.editReply({ content: `✅ **تم التحويل بنجاح!**\nمبلغ: ${amount.toLocaleString("en-US")} ريال إلى <@${st.targetId}>` }).catch(() => {});
+      return await i.editReply({ content: `✅ **تم التحويل بنجاح!**\nمبلغ: ${amount.toLocaleString("en-US")} ريال لكل مستفيد (${targetIds.length})` }).catch(() => {});
     }
   }
 
@@ -7235,5 +7701,5 @@ async function handleTransferKeys(i) {
   const idx = fields.findIndex(f => f.name === "المبلغ الحالي");
   if (idx >= 0) fields[idx].value = st.amount.length ? parseInt(st.amount).toLocaleString("en-US") + " ريال" : "—";
   
-  return await i.update({ embeds: [embed] }).catch(() => {});
+  return await i.update({ embeds: [embed], components: buildTransferComponentsFromState(userId, st) }).catch(() => {});
 }

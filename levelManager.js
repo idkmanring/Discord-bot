@@ -12,6 +12,67 @@ const LEVEL_ROLES = {
     25: '1381407700642041957'
 };
 
+const LEVEL_REWARD = 10000;
+const ROLE_LEVEL_BONUS = 50000;
+
+async function grantLevelRewards(db, userId, currentLevel, roleLevelsReached) {
+    const rewards = db.collection("level_rewards");
+    const existing = await rewards.findOne({ userId: String(userId) });
+    const lastRewardedLevel = Number(existing?.rewardedLevel || 1);
+    const rewardedRoleLevels = new Set((existing?.roleBonusLevels || []).map(Number));
+
+    const newLevels = Math.max(0, currentLevel - lastRewardedLevel);
+    const levelRewardTotal = newLevels * LEVEL_REWARD;
+    const newRoleLevels = roleLevelsReached.filter(level => !rewardedRoleLevels.has(Number(level)));
+    const roleBonusTotal = newRoleLevels.length * ROLE_LEVEL_BONUS;
+    const totalReward = levelRewardTotal + roleBonusTotal;
+
+    if (totalReward <= 0) {
+        await rewards.updateOne(
+            { userId: String(userId) },
+            { $max: { rewardedLevel: currentLevel }, $setOnInsert: { roleBonusLevels: [] } },
+            { upsert: true }
+        );
+        return;
+    }
+
+    await db.collection("users").updateOne(
+        { userId: String(userId) },
+        { $inc: { wallet: totalReward } },
+        { upsert: true }
+    );
+
+    const txs = [];
+    if (levelRewardTotal > 0) {
+        txs.push({
+            userId: String(userId),
+            amount: levelRewardTotal,
+            reason: `مكافأة اللفل: ${newLevels} لفل`,
+            timestamp: new Date(),
+            ref: { type: "level_reward", fromLevel: lastRewardedLevel + 1, toLevel: currentLevel }
+        });
+    }
+    for (const level of newRoleLevels) {
+        txs.push({
+            userId: String(userId),
+            amount: ROLE_LEVEL_BONUS,
+            reason: `مكافأة رول لفل ${level}`,
+            timestamp: new Date(),
+            ref: { type: "level_role_bonus", level }
+        });
+    }
+    if (txs.length) await db.collection("transactions").insertMany(txs);
+
+    await rewards.updateOne(
+        { userId: String(userId) },
+        {
+            $max: { rewardedLevel: currentLevel },
+            $addToSet: { roleBonusLevels: { $each: newRoleLevels.map(Number) } },
+        },
+        { upsert: true }
+    );
+}
+
 // فصلنا منطق الفحص في دالة مستقلة عشان نقدر نشغلها في أي وقت
 async function checkAndAssignRoles(client, db) {
     try {
@@ -39,13 +100,20 @@ async function checkAndAssignRoles(client, db) {
                 }
             }
 
-            // إذا اللفل أقل من 5، ما عنده أي رتبة يستحقها، نتخطاه
-            if (rolesToAdd.length === 0) continue;
-
             try {
                 // جلب العضو من السيرفر
                 const member = await guild.members.fetch(userId).catch(() => null);
                 if (!member) continue; // العضو غادر السيرفر
+
+                await grantLevelRewards(
+                    db,
+                    userId,
+                    currentLevel,
+                    Object.keys(LEVEL_ROLES).map(Number).filter(level => currentLevel >= level)
+                );
+
+                // إذا اللفل أقل من 5، ما عنده أي رتبة يستحقها، نكتفي بمكافآت اللفل
+                if (rolesToAdd.length === 0) continue;
 
                 // الفحص الصامت: تصفية الرتب اللي العضو يمتلكها مسبقاً
                 const missingRoles = rolesToAdd.filter(roleId => !member.roles.cache.has(roleId));
@@ -58,6 +126,7 @@ async function checkAndAssignRoles(client, db) {
                     // حماية البوت: تأخير 1.5 ثانية بين كل عضو وعضو عشان ديسكورد ما يعطي البوت باند
                     await new Promise(resolve => setTimeout(resolve, 1500));
                 }
+
             } catch (err) {
                 console.error(`[خطأ] تعذر إعطاء الرتب للعضو ${userId}:`, err.message);
             }

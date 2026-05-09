@@ -2,6 +2,7 @@
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } = require("discord.js");
 const { createCanvas, loadImage } = require("@napi-rs/canvas");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { addGameReward } = require("../utils/economyEffects");
 
 // إعداد Gemini API
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -225,14 +226,11 @@ function isAnswerCorrect(guess, answer) {
 // 4. إدارة اللعبة
 // ==========================================
 async function winRewardLocally(db, userId, amount, reason) {
-  await db.collection("users").updateOne(
-    { userId: String(userId) },
-    { $inc: { wallet: amount } },
-    { upsert: true }
-  );
+  const reward = await addGameReward(userId, amount, db);
   await db.collection("transactions").insertOne({
-    userId: String(userId), amount, reason, timestamp: new Date()
+    userId: String(userId), amount: reward.finalAmount, reason, timestamp: new Date()
   });
+  return reward;
 }
 
 async function startPicChallengeForUser(channel, userId) {
