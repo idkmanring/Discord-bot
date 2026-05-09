@@ -191,6 +191,12 @@ async function handleJoin(client, interaction, tournamentId) {
     return replyPrivate(interaction, "التسجيل مقفل حاليًا.");
   }
 
+  // --- التعديل هنا: منع المشاركة أكثر من مرة ---
+  if (tournament.participants.some(p => p.userId === interaction.user.id)) {
+    return replyPrivate(interaction, "أنت مسجل في الدوري بالفعل! لا يمكنك المشاركة أكثر من مرة.");
+  }
+  // ------------------------------------------
+
   const participant = makeParticipant(interaction, tournament);
   await LeagueTournament.updateOne(
     { _id: tournament._id, status: "registration" },
@@ -1051,6 +1057,8 @@ async function startActiveMatch(client, interaction, matchId, game, prefixText) 
         status: "active",
         selectedGame: game,
         startedAt: new Date(),
+        // حفظ رابط اللعبة مع بيانات المباراة لتسهيل الوصول لاحقاً إن لزم
+        gameLink: getLeagueGameLink(game) 
       },
     },
     { new: true }
@@ -1660,7 +1668,7 @@ function renderMatchCardCanvas(match, team1, team2, teams, matches) {
   ctx.fillStyle = COLORS.gold;
   ctx.font = "700 44px Cairo, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("بطاقة المباراة", 550, 70);
+  ctx.fillText("المباراة الحالية", 550, 70);
 
   drawTeamMatchPanel(ctx, 80, 125, 400, 310, team1, teams, matches, match.odds?.team1, "1");
   drawTeamMatchPanel(ctx, 620, 125, 400, 310, team2, teams, matches, match.odds?.team2, "2");
@@ -1935,10 +1943,10 @@ function getLeagueGameLink(game) {
 
 function makeParticipant(interaction, tournament = null) {
   const baseName = getInteractionDisplayName(interaction);
-  const repeatCount = (tournament?.participants || []).filter((p) => p.userId === interaction.user.id).length;
+  // التعديل: إزالة إضافة أرقام للتكرار، نأخذ الاسم الأساسي فقط
   return {
     userId: interaction.user.id,
-    username: `${baseName}${repeatCount ? repeatCount : ""}`,
+    username: baseName,
     avatarURL: interaction.user.displayAvatarURL?.({ extension: "png", size: 128 }) || null,
     joinedAt: new Date(),
   };
