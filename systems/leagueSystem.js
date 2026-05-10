@@ -1838,6 +1838,8 @@ function buildReplaceSelect(tournamentId, requesterTeam, teams, matches) {
   );
 }
 
+
+
 // ---- التعديل الأول: دالة المزامنة (تولد مباريات الإياب للوضع الحالي تلقائياً) ----
 async function syncMissingMatches(tournamentId) {
   const teams = await LeagueTeam.find({ tournamentId }).lean();
@@ -1921,6 +1923,12 @@ async function syncMissingMatches(tournamentId) {
   }
   
   return 0;
+}
+
+
+async function getTournament(id) {
+  if (!mongoose.Types.ObjectId.isValid(String(id))) return null;
+  return LeagueTournament.findById(id);
 }
 
 async function findUserTeam(tournamentId, userId) {
