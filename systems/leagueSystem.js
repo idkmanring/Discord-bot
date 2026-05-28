@@ -191,12 +191,6 @@ async function handleJoin(client, interaction, tournamentId) {
     return replyPrivate(interaction, "التسجيل مقفل حاليًا.");
   }
 
-  // --- التعديل هنا: منع المشاركة أكثر من مرة ---
-  if (tournament.participants.some(p => p.userId === interaction.user.id)) {
-    return replyPrivate(interaction, "أنت مسجل في الدوري بالفعل! لا يمكنك المشاركة أكثر من مرة.");
-  }
-  // ------------------------------------------
-
   const participant = makeParticipant(interaction, tournament);
   await LeagueTournament.updateOne(
     { _id: tournament._id, status: "registration" },
@@ -231,7 +225,6 @@ async function handleLeave(client, interaction, tournamentId) {
   await refreshRegistrationMessage(client, tournament._id);
 }
 
-// ---- التعديل الثاني: دالة بداية الدوري (عشان أي دوري جديد مستقبلاً يبدأ ذهاب وإياب من الأساس) ----
 async function handleStartTournament(client, interaction, tournamentId) {
   await waitForMongoose();
   if (interaction.user.id !== ADMIN_ID) {
@@ -272,27 +265,14 @@ async function handleStartTournament(client, interaction, tournamentId) {
 
   const now = new Date();
   const matches = [];
-  
-  // توليد مباريات الذهاب والإياب للدوري الجديد
   for (let i = 0; i < teams.length; i += 1) {
     for (let j = i + 1; j < teams.length; j += 1) {
-      // مباراة الذهاب
       matches.push({
         guildId: tournament.guildId,
         tournamentId: tournament._id,
         matchId: makeMatchId(matches.length),
         team1Id: teams[i].teamId,
         team2Id: teams[j].teamId,
-        status: "pending",
-        odds: { team1: 1.9, team2: 1.9 },
-      });
-      // مباراة الإياب
-      matches.push({
-        guildId: tournament.guildId,
-        tournamentId: tournament._id,
-        matchId: makeMatchId(matches.length),
-        team1Id: teams[j].teamId, // عكسناهم هنا
-        team2Id: teams[i].teamId,
         status: "pending",
         odds: { team1: 1.9, team2: 1.9 },
       });
@@ -324,7 +304,7 @@ async function handleStartTournament(client, interaction, tournamentId) {
   const reserveText = reserveParticipants.length
     ? `\nالاحتياط: <@${reserveParticipants[0].userId}> بسبب العدد الفردي.`
     : "";
-  await editPrivate(interaction, `تم بدء الدوري: ${teams.length} فرق، ${matches.length} مباراة (نظام ذهاب وإياب).${reserveText}`);
+  await editPrivate(interaction, `تم بدء الدوري: ${teams.length} فرق، ${matches.length} مباراة.${reserveText}`);
 }
 
 async function handleMyMatches(interaction, tournamentId) {
@@ -1071,8 +1051,6 @@ async function startActiveMatch(client, interaction, matchId, game, prefixText) 
         status: "active",
         selectedGame: game,
         startedAt: new Date(),
-        // حفظ رابط اللعبة مع بيانات المباراة لتسهيل الوصول لاحقاً إن لزم
-        gameLink: getLeagueGameLink(game) 
       },
     },
     { new: true }
@@ -1682,7 +1660,7 @@ function renderMatchCardCanvas(match, team1, team2, teams, matches) {
   ctx.fillStyle = COLORS.gold;
   ctx.font = "700 44px Cairo, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("المباراة الحالية", 550, 70);
+  ctx.fillText("بطاقة المباراة", 550, 70);
 
   drawTeamMatchPanel(ctx, 80, 125, 400, 310, team1, teams, matches, match.odds?.team1, "1");
   drawTeamMatchPanel(ctx, 620, 125, 400, 310, team2, teams, matches, match.odds?.team2, "2");
@@ -1838,21 +1816,18 @@ function buildReplaceSelect(tournamentId, requesterTeam, teams, matches) {
   );
 }
 
-
-
-// ---- التعديل الأول: دالة المزامنة (تولد مباريات الإياب للوضع الحالي تلقائياً) ----
 async function syncMissingMatches(tournamentId) {
   const teams = await LeagueTeam.find({ tournamentId }).lean();
   const matches = await LeagueMatch.find({ tournamentId }).lean();
 
-  // خريطة تحسب كم مباراة موجودة بين كل فريقين حالياً
-  const matchCounts = new Map();
+  const existingMatchPairs = new Set();
   
+  // حفظ كل المباريات الحالية عشان ما نكررها
   for (const match of matches) {
     const id1 = match.team1Id;
     const id2 = match.team2Id;
     const key = id1 < id2 ? `${id1}-${id2}` : `${id2}-${id1}`;
-    matchCounts.set(key, (matchCounts.get(key) || 0) + 1);
+    existingMatchPairs.add(key);
   }
 
   const newMatches = [];
@@ -1864,11 +1839,8 @@ async function syncMissingMatches(tournamentId) {
       const id2 = teams[j].teamId;
       const key = id1 < id2 ? `${id1}-${id2}` : `${id2}-${id1}`;
 
-      const currentCount = matchCounts.get(key) || 0;
-
-      // الحالة الأولى: إذا ما لعبوا أبداً (0 مباريات)، ننشئ لهم ذهاب وإياب
-      if (currentCount === 0) {
-        // مباراة الذهاب
+      // إذا الفريقين ما بينهم مباراة، ننشئ وحدة جديدة
+      if (!existingMatchPairs.has(key)) {
         newMatches.push({
           guildId: teams[0].guildId,
           tournamentId: tournamentId,
@@ -1878,45 +1850,12 @@ async function syncMissingMatches(tournamentId) {
           status: "pending",
           odds: { team1: 1.9, team2: 1.9 },
         });
-        // مباراة الإياب (نعكس الفرق)
-        newMatches.push({
-          guildId: teams[0].guildId,
-          tournamentId: tournamentId,
-          matchId: makeMatchId(matches.length + newMatches.length),
-          team1Id: id2, 
-          team2Id: id1,
-          status: "pending",
-          odds: { team1: 1.9, team2: 1.9 },
-        });
-        matchCounts.set(key, 2);
-      } 
-      // الحالة الثانية: إذا بينهم مباراة واحدة بس (الدوري الحالي حقك)، نضيف الإياب
-      else if (currentCount === 1) {
-        // نجيب المباراة الموجودة عشان نعكسهم بالضبط
-        const existingMatch = matches.find(m => 
-          (m.team1Id === id1 && m.team2Id === id2) || 
-          (m.team1Id === id2 && m.team2Id === id1)
-        );
-
-        // نخلي اللي كان فريق 2 يصير هو فريق 1 في الإياب
-        const awayTeam1 = existingMatch ? existingMatch.team2Id : id2;
-        const awayTeam2 = existingMatch ? existingMatch.team1Id : id1;
-
-        newMatches.push({
-          guildId: teams[0].guildId,
-          tournamentId: tournamentId,
-          matchId: makeMatchId(matches.length + newMatches.length),
-          team1Id: awayTeam1,
-          team2Id: awayTeam2,
-          status: "pending",
-          odds: { team1: 1.9, team2: 1.9 },
-        });
-        matchCounts.set(key, 2);
+        existingMatchPairs.add(key); // نضيفها للسيت عشان ما تتكرر بالغلط
       }
     }
   }
 
-  // إذا تم إنشاء مباريات إياب جديدة، نحفظها بالمونقو
+  // إذا في مباريات جديدة تم إنشاؤها، نحفظها بالمونقو
   if (newMatches.length > 0) {
     await LeagueMatch.insertMany(newMatches);
     return newMatches.length;
@@ -1924,7 +1863,6 @@ async function syncMissingMatches(tournamentId) {
   
   return 0;
 }
-
 
 async function getTournament(id) {
   if (!mongoose.Types.ObjectId.isValid(String(id))) return null;
@@ -1997,10 +1935,10 @@ function getLeagueGameLink(game) {
 
 function makeParticipant(interaction, tournament = null) {
   const baseName = getInteractionDisplayName(interaction);
-  // التعديل: إزالة إضافة أرقام للتكرار، نأخذ الاسم الأساسي فقط
+  const repeatCount = (tournament?.participants || []).filter((p) => p.userId === interaction.user.id).length;
   return {
     userId: interaction.user.id,
-    username: baseName,
+    username: `${baseName}${repeatCount ? repeatCount : ""}`,
     avatarURL: interaction.user.displayAvatarURL?.({ extension: "png", size: 128 }) || null,
     joinedAt: new Date(),
   };
