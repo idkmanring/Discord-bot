@@ -17,7 +17,6 @@ const { createCanvas, GlobalFonts } = require("@napi-rs/canvas");
 const LeagueTournament = require("../models/LeagueTournament");
 const LeagueTeam = require("../models/LeagueTeam");
 const LeagueMatch = require("../models/LeagueMatch");
-const LeagueBet = require("../models/LeagueBet");
 
 const ADMIN_ID = process.env.LEAGUE_ADMIN_ID || "532264405476573224";
 const LEAGUE_CHANNEL_ID = process.env.LEAGUE_CHANNEL_ID || "1502480106994532553";
@@ -31,6 +30,7 @@ const LEAGUE_GAMES = [
   "كود نيمز",
   "حروف مع عزيز",
   "سين جيم",
+  "كليك",
 ];
 
 const LEAGUE_GAME_LINKS = {
@@ -39,6 +39,7 @@ const LEAGUE_GAME_LINKS = {
   "كود نيمز": "https://codenames.game/r/fonav-rirad",
   "حروف مع عزيز": "https://buzzin.live/",
   "سين جيم": "https://seenjeemkw.com/",
+  "كليك": "https://kalak.gg/", // ضع الرابط الحقيقي هنا
 };
 
 const COLORS = {
@@ -117,13 +118,13 @@ async function handleLeagueCommand(client, message) {
   const activeTournament = await LeagueTournament.findOne({ guildId, status: "active" }).sort({ startedAt: -1 });
 
   if (activeTournament) {
-    // ---- إضافة نظام المزامنة للفرق المضافة يدوياً ----
     const addedMatchesCount = await syncMissingMatches(activeTournament._id);
     
-    await refreshStandingsMessage(client, activeTournament._id, message.author.id);
+    // تفعيل forceResend = true لحذف الرسالة القديمة وإرسال واحدة جديدة
+    await refreshStandingsMessage(client, activeTournament._id, message.author.id, true);
     const standingsChannelId = activeTournament.standingsChannelId || LEAGUE_RESULTS_CHANNEL_ID;
     
-    let replyMsg = `جدول الدوري موجود هنا: <#${standingsChannelId}>`;
+    let replyMsg = `تم تحديث وإرسال جدول الدوري هنا: <#${standingsChannelId}>`;
     if (addedMatchesCount > 0) {
       replyMsg += `\n*(تم اكتشاف فرق جديدة بالمونقو وإضافة ${addedMatchesCount} مباراة لهم تلقائياً! 🔄)*`;
     }
@@ -144,7 +145,8 @@ async function handleLeagueCommand(client, message) {
     });
   }
 
-  await refreshRegistrationMessage(client, tournament._id);
+  // تفعيل forceResend = true لحذف رسالة التسجيل القديمة وإرسال واحدة جديدة
+  await refreshRegistrationMessage(client, tournament._id, true);
   if (message.channel.id !== LEAGUE_CHANNEL_ID) {
     await message.reply(`فتحت تسجيل الدوري هنا: <#${LEAGUE_CHANNEL_ID}>`).catch(() => {});
   }
@@ -168,7 +170,6 @@ async function handleLeagueInteraction(client, interaction) {
     if (action === "game_agree") return handleCustomGameVote(client, interaction, parts[2]);
     if (action === "game_confirm") return handleGameConfirm(client, interaction, parts[2], parts[3], parts[4]);
     if (action === "admin_result") return handleAdminResult(client, interaction, parts[2], parts[3]);
-    if (action === "bet") return handleBetButton(interaction, parts[2], Number(parts[3]));
     if (action === "swap_vote") return handleSwapVote(client, interaction, parts[2], parts[3]);
   }
 
@@ -180,7 +181,6 @@ async function handleLeagueInteraction(client, interaction) {
 
   if (interaction.isModalSubmit?.()) {
     if (action === "rename_modal") return handleRenameModal(client, interaction, parts[2]);
-    if (action === "bet_modal") return handleBetModal(client, interaction, parts[2], Number(parts[3]));
   }
 }
 
@@ -189,6 +189,10 @@ async function handleJoin(client, interaction, tournamentId) {
   const tournament = await getTournament(tournamentId);
   if (!tournament || tournament.status !== "registration") {
     return replyPrivate(interaction, "التسجيل مقفل حاليًا.");
+  }
+
+  if (tournament.participants.some(p => p.userId === interaction.user.id)) {
+    return replyPrivate(interaction, "أنت مسجل في الدوري بالفعل! لا يمكنك المشاركة أكثر من مرة.");
   }
 
   const participant = makeParticipant(interaction, tournament);
@@ -265,6 +269,7 @@ async function handleStartTournament(client, interaction, tournamentId) {
 
   const now = new Date();
   const matches = [];
+  
   for (let i = 0; i < teams.length; i += 1) {
     for (let j = i + 1; j < teams.length; j += 1) {
       matches.push({
@@ -274,14 +279,20 @@ async function handleStartTournament(client, interaction, tournamentId) {
         team1Id: teams[i].teamId,
         team2Id: teams[j].teamId,
         status: "pending",
-        odds: { team1: 1.9, team2: 1.9 },
+      });
+      matches.push({
+        guildId: tournament.guildId,
+        tournamentId: tournament._id,
+        matchId: makeMatchId(matches.length),
+        team1Id: teams[j].teamId,
+        team2Id: teams[i].teamId,
+        status: "pending",
       });
     }
   }
 
   await LeagueTeam.deleteMany({ tournamentId: tournament._id });
   await LeagueMatch.deleteMany({ tournamentId: tournament._id });
-  await LeagueBet.deleteMany({ tournamentId: tournament._id });
   await LeagueTeam.insertMany(teams);
   await LeagueMatch.insertMany(matches);
 
@@ -304,7 +315,7 @@ async function handleStartTournament(client, interaction, tournamentId) {
   const reserveText = reserveParticipants.length
     ? `\nالاحتياط: <@${reserveParticipants[0].userId}> بسبب العدد الفردي.`
     : "";
-  await editPrivate(interaction, `تم بدء الدوري: ${teams.length} فرق، ${matches.length} مباراة.${reserveText}`);
+  await editPrivate(interaction, `تم بدء الدوري: ${teams.length} فرق، ${matches.length} مباراة (نظام ذهاب وإياب).${reserveText}`);
 }
 
 async function handleMyMatches(interaction, tournamentId) {
@@ -605,7 +616,6 @@ async function handleStartMatchPick(client, interaction, tournamentId) {
 
   const teams = await LeagueTeam.find({ tournamentId: tournament._id }).lean();
   const matches = await LeagueMatch.find({ tournamentId: tournament._id }).lean();
-  const odds = calculateOdds(team1, team2, matches);
 
   match = await LeagueMatch.findOneAndUpdate(
     { tournamentId: tournament._id, matchId, status: { $in: ["pending", "postponed"] } },
@@ -614,7 +624,6 @@ async function handleStartMatchPick(client, interaction, tournamentId) {
         status: "ready_check",
         readyUserIds: [],
         readyStartedAt: new Date(),
-        odds,
       },
     },
     { new: true }
@@ -626,38 +635,30 @@ async function handleStartMatchPick(client, interaction, tournamentId) {
     await renderMatchCardCanvas(match.toObject(), team1, team2, teams, matches),
     { name: "league-match.png" }
   );
-  const content = await buildMatchContent(match, team1, team2);
+  
+  // بناء المحتوى الأساسي وإضافة منشن اللاعبين تحته عشان ما نحتاج ثريد
+  let baseContent = await buildMatchContent(match, team1, team2);
+  const pings = [
+    team1.members.map((m) => `<@${m.userId}>`).join(" "),
+    team2.members.map((m) => `<@${m.userId}>`).join(" ")
+  ].join(" | ");
+  
+  baseContent += `\n\n${pings}\nاضغطوا بدء عند جاهزية الأربعة.`;
+
   const baseMessage = await channel.send({
-    content,
+    content: baseContent,
     files: [attachment],
-    components: [makeReadyRow(match.matchId), await makeBetRow(match.matchId, odds)],
+    components: [makeReadyRow(match.matchId)],
   });
 
-  const threadName = truncateThreadName(`دوري ${teamName(team1)} ضد ${teamName(team2)}`);
-  const thread = await baseMessage.startThread({
-    name: threadName,
-    autoArchiveDuration: 1440,
-  }).catch(() => null);
-
-  const playChannel = thread || channel;
-  if (thread) {
-    await thread.send({
-      content: [
-        team1.members.map((m) => `<@${m.userId}>`).join(" "),
-        team2.members.map((m) => `<@${m.userId}>`).join(" "),
-        "اضغطوا بدء عند جاهزية الأربعة. الرهان متاح فقط قبل بداية المباراة.",
-      ].join("\n"),
-      components: [makeReadyRow(match.matchId), await makeBetRow(match.matchId, odds)],
-    }).catch(() => {});
-  }
-
+  // حفظ بيانات المباراة بدون إنشاء ثريد
   match.channelId = channel.id;
-  match.threadId = thread?.id || null;
+  match.threadId = null; 
   match.messageId = baseMessage.id;
   await match.save();
   scheduleReadyTimeout(client, match.matchId);
 
-  await editPrivate(interaction, `تم فتح المباراة: ${thread ? `<#${thread.id}>` : `<#${playChannel.id}>`}`);
+  await editPrivate(interaction, `تم فتح المباراة في الروم: <#${channel.id}>`);
 }
 
 async function handleReady(client, interaction, matchId) {
@@ -886,109 +887,6 @@ async function handleGameConfirm(client, interaction, matchId, gameKey, vote) {
   await startActiveMatch(client, interaction, matchId, game, "تم الاتفاق على اللعبة");
 }
 
-async function handleBetButton(interaction, matchId, teamPick) {
-  await waitForMongoose();
-  const match = await LeagueMatch.findOne({ matchId });
-  if (!match || ["active", "finished"].includes(match.status)) {
-    return replyPrivate(interaction, "الرهان مقفل لهذه المباراة.");
-  }
-
-  const { team1, team2 } = await getMatchTeams(match);
-  if (isMatchPlayer(interaction.user.id, team1, team2)) {
-    return replyPrivate(interaction, "لا يمكنك المراهنة على مباراة فريقك.");
-  }
-
-  const pickedTeam = teamPick === 1 ? team1 : team2;
-  if (!pickedTeam) return replyPrivate(interaction, "اختيار الرهان غير صحيح.");
-
-  const modal = new ModalBuilder()
-    .setCustomId(`league:bet_modal:${matchId}:${teamPick}`)
-    .setTitle(`رهان على ${teamName(pickedTeam)}`);
-
-  const amountInput = new TextInputBuilder()
-    .setCustomId("amount")
-    .setLabel("مبلغ الرهان")
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder("مثال: 5000")
-    .setRequired(true);
-
-  modal.addComponents(new ActionRowBuilder().addComponents(amountInput));
-  await interaction.showModal(modal);
-}
-
-async function handleBetModal(client, interaction, matchId, teamPick) {
-  await waitForMongoose();
-  await deferPrivate(interaction);
-
-  const amount = parseAmount(interaction.fields.getTextInputValue("amount"));
-  if (!Number.isInteger(amount) || amount <= 0) {
-    return editPrivate(interaction, "اكتب مبلغًا صحيحًا أكبر من صفر.");
-  }
-
-  const match = await LeagueMatch.findOne({ matchId });
-  if (!match || ["active", "finished"].includes(match.status)) {
-    return editPrivate(interaction, "الرهان مقفل لهذه المباراة.");
-  }
-
-  const { team1, team2 } = await getMatchTeams(match);
-  if (isMatchPlayer(interaction.user.id, team1, team2)) {
-    return editPrivate(interaction, "لا يمكنك المراهنة على مباراة فريقك.");
-  }
-
-  const pickedTeam = teamPick === 1 ? team1 : team2;
-  const odds = teamPick === 1 ? Number(match.odds?.team1 || 1.9) : Number(match.odds?.team2 || 1.9);
-
-  const existing = await LeagueBet.findOne({ matchId, userId: interaction.user.id });
-  if (existing) return editPrivate(interaction, "لديك رهان محفوظ على هذه المباراة بالفعل.");
-
-  let bet;
-  try {
-    bet = await LeagueBet.create({
-      guildId: match.guildId,
-      tournamentId: match.tournamentId,
-      matchId,
-      userId: interaction.user.id,
-      username: getInteractionDisplayName(interaction),
-      teamPick,
-      pickedTeamId: pickedTeam.teamId,
-      amount,
-      odds,
-      status: "pending",
-    });
-  } catch (err) {
-    if (err.code === 11000) return editPrivate(interaction, "لديك رهان محفوظ على هذه المباراة بالفعل.");
-    throw err;
-  }
-
-  const db = await getMongoDb();
-  const users = db.collection("users");
-  const debit = await users.updateOne(
-    { userId: String(interaction.user.id), wallet: { $gte: amount } },
-    { $inc: { wallet: -amount } }
-  );
-
-  if (!debit.modifiedCount) {
-    await LeagueBet.deleteOne({ _id: bet._id });
-    return editPrivate(interaction, "رصيدك لا يكفي أو لا تملك محفظة. افتح محفظتك بأمر `رصيد`.");
-  }
-
-  const userDoc = await users.findOne({ userId: String(interaction.user.id) });
-  await recordTransaction({
-    userId: interaction.user.id,
-    amount: -amount,
-    reason: `دوري - رهان على ${teamName(pickedTeam)}`,
-    type: "bet",
-    game: "league",
-    guildId: interaction.guildId || match.guildId,
-    channelId: interaction.channelId,
-    balanceAfter: userDoc?.wallet ?? null,
-    ref: { type: "league_bet", matchId, betId: String(bet._id), pickedTeamId: pickedTeam.teamId },
-  });
-
-  await refreshMatchMessage(client, matchId);
-  await editPrivate(interaction, `تم تسجيل رهانك: **${amount.toLocaleString("en-US")}** على **${teamName(pickedTeam)}** بسعر x${odds.toFixed(2)}.`);
-}
-
 async function handleAdminResult(client, interaction, matchId, resultType) {
   await waitForMongoose();
   if (interaction.user.id !== ADMIN_ID) {
@@ -1027,11 +925,10 @@ async function handleAdminResult(client, interaction, matchId, resultType) {
   if (!updated) return editPrivate(interaction, "تم اعتماد النتيجة سابقًا.");
 
   await applyMatchResult(updated, resultType, team1, team2);
-  await resolveMatchBets(updated, winnerTeamId, isDraw);
   await cleanupMatchArtifacts(client, updated);
   await refreshStandingsMessage(client, updated.tournamentId, null);
 
-  await editPrivate(interaction, "تم اعتماد النتيجة وتحديث الجدول والرهانات.");
+  await editPrivate(interaction, "تم اعتماد النتيجة وتحديث الجدول.");
 }
 
 async function startActiveMatch(client, interaction, matchId, game, prefixText) {
@@ -1051,6 +948,7 @@ async function startActiveMatch(client, interaction, matchId, game, prefixText) 
         status: "active",
         selectedGame: game,
         startedAt: new Date(),
+        gameLink: getLeagueGameLink(game) 
       },
     },
     { new: true }
@@ -1061,7 +959,7 @@ async function startActiveMatch(client, interaction, matchId, game, prefixText) 
   await refreshMatchMessage(client, matchId);
   const gameLink = getLeagueGameLink(game);
   const linkLine = gameLink ? `\nرابط اللعبة: ${gameLink}` : "";
-  await sendMatchSystemMessage(client, updated, `${prefixText}: **${game}**${linkLine}\nبدأت المباراة، وتم إغلاق الرهانات.`);
+  await sendMatchSystemMessage(client, updated, `${prefixText}: **${game}**${linkLine}\nبدأت المباراة.`);
   await sendAdminResultDM(client, updated, team1, team2, game);
   await editPrivate(interaction, `بدأت المباراة على لعبة: **${game}**`);
 }
@@ -1088,59 +986,7 @@ async function applyMatchResult(match, resultType, team1, team2) {
   );
 }
 
-async function resolveMatchBets(match, winnerTeamId, isDraw) {
-  const bets = await LeagueBet.find({ matchId: match.matchId, status: "pending" });
-  if (!bets.length) return;
-
-  for (const bet of bets) {
-    if (isDraw) {
-      await creditWallet(bet.userId, bet.amount);
-      const balanceAfter = await getWallet(bet.userId);
-      await LeagueBet.updateOne(
-        { _id: bet._id },
-        { $set: { status: "refunded", payout: bet.amount, resolvedAt: new Date() } }
-      );
-      await recordTransaction({
-        userId: bet.userId,
-        amount: bet.amount,
-        reason: "دوري - استرجاع رهان بسبب التعادل",
-        type: "refund",
-        game: "league",
-        guildId: match.guildId,
-        balanceAfter,
-        ref: { type: "league_bet_refund", matchId: match.matchId, betId: String(bet._id) },
-      });
-      continue;
-    }
-
-    if (bet.pickedTeamId === winnerTeamId) {
-      const payout = Math.floor(bet.amount * bet.odds);
-      await creditWallet(bet.userId, payout);
-      const balanceAfter = await getWallet(bet.userId);
-      await LeagueBet.updateOne(
-        { _id: bet._id },
-        { $set: { status: "won", payout, resolvedAt: new Date() } }
-      );
-      await recordTransaction({
-        userId: bet.userId,
-        amount: payout,
-        reason: "دوري - ربح رهان",
-        type: "payout",
-        game: "league",
-        guildId: match.guildId,
-        balanceAfter,
-        ref: { type: "league_bet_payout", matchId: match.matchId, betId: String(bet._id) },
-      });
-    } else {
-      await LeagueBet.updateOne(
-        { _id: bet._id },
-        { $set: { status: "lost", payout: 0, resolvedAt: new Date() } }
-      );
-    }
-  }
-}
-
-async function refreshRegistrationMessage(client, tournamentId) {
+async function refreshRegistrationMessage(client, tournamentId, forceResend = false) {
   const tournament = await getTournament(tournamentId);
   if (!tournament) return null;
 
@@ -1171,8 +1017,18 @@ async function refreshRegistrationMessage(client, tournamentId) {
   }
 
   if (message) {
-    await message.edit(payload).catch(() => null);
-    return message;
+    if (forceResend) {
+      await message.delete().catch(() => {});
+      message = await channel.send(payload);
+      await LeagueTournament.updateOne(
+        { _id: tournament._id },
+        { $set: { registrationMessageId: message.id, registrationChannelId: channel.id } }
+      );
+      return message;
+    } else {
+      await message.edit(payload).catch(() => null);
+      return message;
+    }
   }
 
   message = await channel.send(payload);
@@ -1194,7 +1050,7 @@ async function deleteRegistrationMessage(client, tournament) {
   );
 }
 
-async function refreshStandingsMessage(client, tournamentId, viewerUserId = null) {
+async function refreshStandingsMessage(client, tournamentId, viewerUserId = null, forceResend = false) {
   const tournament = await getTournament(tournamentId);
   if (!tournament) return null;
 
@@ -1228,8 +1084,18 @@ async function refreshStandingsMessage(client, tournamentId, viewerUserId = null
   }
 
   if (message) {
-    await message.edit(payload).catch(() => null);
-    return message;
+    if (forceResend) {
+      await message.delete().catch(() => {});
+      message = await channel.send(payload);
+      await LeagueTournament.updateOne(
+        { _id: tournament._id },
+        { $set: { standingsMessageId: message.id, standingsChannelId: channel.id } }
+      );
+      return message;
+    } else {
+      await message.edit(payload).catch(() => null);
+      return message;
+    }
   }
 
   message = await channel.send(payload);
@@ -1247,20 +1113,27 @@ async function refreshMatchMessage(client, matchId) {
   const message = await channel?.messages.fetch(match.messageId).catch(() => null);
   if (!message) return;
   const { team1, team2 } = await getMatchTeams(match);
+  
   const content = await buildMatchContent(match, team1, team2);
+  
   const readyDisabled = match.status !== "ready_check";
-  const betDisabled = ["active", "finished"].includes(match.status);
-  const components = [makeReadyRow(match.matchId, readyDisabled), await makeBetRow(match.matchId, match.odds, betDisabled)];
-  await message.edit({ content, components }).catch(() => {});
+  const components = [makeReadyRow(match.matchId, readyDisabled)];
+  
+  // لا نمسح المنشن لو موجود في المحتوى القديم للرسالة
+  let finalContent = content;
+  if (message.content.includes("|") && message.content.includes("<@")) {
+      const pingsPart = message.content.split("\n\n")[1];
+      if (pingsPart) finalContent += `\n\n${pingsPart}`;
+  }
+
+  await message.edit({ content: finalContent, components }).catch(() => {});
 }
 
 async function buildMatchContent(match, team1, team2) {
-  const totals = await getBetTotals(match.matchId);
   return [
     `**مباراة دوري** - ${statusLabel(match.status)}`,
-    `1 = **${teamName(team1)}** x${Number(match.odds?.team1 || 1.9).toFixed(2)}`,
-    `2 = **${teamName(team2)}** x${Number(match.odds?.team2 || 1.9).toFixed(2)}`,
-    `إجمالي الرهانات: 1) ${totals.team1.toLocaleString("en-US")} | 2) ${totals.team2.toLocaleString("en-US")}`,
+    `1 = **${teamName(team1)}**`,
+    `2 = **${teamName(team2)}**`,
   ].join("\n");
 }
 
@@ -1337,6 +1210,7 @@ async function archiveMatchThread(client, match) {
 }
 
 async function cleanupMatchArtifacts(client, match) {
+  // الحفاظ على كود مسح الثريد تحسباً لو كان فيه مباريات قديمة مفتوحة حالياً بثريد
   if (match.threadId) {
     const thread = await client.channels.fetch(match.threadId).catch(() => null);
     if (thread?.delete) {
@@ -1352,6 +1226,7 @@ async function cleanupMatchArtifacts(client, match) {
     }
   }
 
+  // حذف الرسالة الأساسية في الروم
   if (match.channelId && match.messageId) {
     const channel = await getTextChannel(client, match.channelId);
     const message = await channel?.messages.fetch(match.messageId).catch(() => null);
@@ -1374,6 +1249,7 @@ async function sendMatchSystemMessage(client, match, content) {
 }
 
 async function getMatchChannel(client, match) {
+  // التيك للأعضاء اللي عندهم مباريات قديمة لسا بثريد، غير كذا بياخذ الروم الرئيسي 
   if (match.threadId) {
     const thread = await client.channels.fetch(match.threadId).catch(() => null);
     if (thread?.send) return thread;
@@ -1639,7 +1515,6 @@ function renderMyMatchesCanvas(userTeams, matches, allTeams) {
     drawCellText(ctx, truncateCanvasText(ctx, row.game, columns[3].w - 10), columns[3], y - 5);
     drawCellText(ctx, row.status, columns[4], y - 5);
     
-    // المربع الملون لنتيجة المباراة (Pill)
     if (row.outcome !== "none") {
       const pillColor = row.outcome === "win" ? COLORS.green : row.outcome === "loss" ? COLORS.red : COLORS.yellow;
       const px = columns[5].x + columns[5].w / 2 - 40;
@@ -1660,23 +1535,19 @@ function renderMatchCardCanvas(match, team1, team2, teams, matches) {
   ctx.fillStyle = COLORS.gold;
   ctx.font = "700 44px Cairo, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("بطاقة المباراة", 550, 70);
+  ctx.fillText("المباراة الحالية", 550, 70);
 
-  drawTeamMatchPanel(ctx, 80, 125, 400, 310, team1, teams, matches, match.odds?.team1, "1");
-  drawTeamMatchPanel(ctx, 620, 125, 400, 310, team2, teams, matches, match.odds?.team2, "2");
+  drawTeamMatchPanel(ctx, 80, 125, 400, 310, team1, teams, matches, "1");
+  drawTeamMatchPanel(ctx, 620, 125, 400, 310, team2, teams, matches, "2");
 
   ctx.fillStyle = COLORS.text;
   ctx.font = "700 42px Cairo, sans-serif";
   ctx.fillText("VS", 550, 290);
 
-  ctx.fillStyle = COLORS.muted;
-  ctx.font = "22px Cairo, sans-serif";
-  ctx.fillText("الرهان متاح قبل بداية المباراة فقط", 550, 485);
-
   return canvas.encode("png");
 }
 
-function drawTeamMatchPanel(ctx, x, y, w, h, team, teams, matches, odds, number) {
+function drawTeamMatchPanel(ctx, x, y, w, h, team, teams, matches, number) {
   drawPanel(ctx, x, y, w, h, 18, "#102834");
   ctx.fillStyle = TEAM_PALETTE[Math.abs(hashCode(team.teamId)) % TEAM_PALETTE.length];
   ctx.fillRect(x, y, 8, h);
@@ -1694,12 +1565,11 @@ function drawTeamMatchPanel(ctx, x, y, w, h, team, teams, matches, odds, number)
     ["الترتيب", `#${rank || "-"}`],
     ["النقاط", `${team.points || 0}`],
     ["نسبة الفوز", `${getWinrate(team).toFixed(0)}%`],
-    ["الاحتمالات", `x${Number(odds || 1.9).toFixed(2)}`],
   ];
 
   ctx.font = "22px Cairo, sans-serif";
   rows.forEach((row, index) => {
-    const yy = y + 125 + index * 42;
+    const yy = y + 135 + index * 46;
     ctx.fillStyle = COLORS.muted;
     ctx.textAlign = "right";
     ctx.fillText(row[0], x + w - 32, yy);
@@ -1769,34 +1639,18 @@ function makeReadyRow(matchId, disabled = false) {
   );
 }
 
-async function makeBetRow(matchId, odds, disabled = false) {
-  return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`league:bet:${matchId}:1`)
-      .setLabel(`رهان على 1 x${Number(odds?.team1 || 1.9).toFixed(2)}`)
-      .setStyle(ButtonStyle.Success)
-      .setDisabled(disabled),
-    new ButtonBuilder()
-      .setCustomId(`league:bet:${matchId}:2`)
-      .setLabel(`رهان على 2 x${Number(odds?.team2 || 1.9).toFixed(2)}`)
-      .setStyle(ButtonStyle.Danger)
-      .setDisabled(disabled)
-  );
-}
-
 function buildReplaceSelect(tournamentId, requesterTeam, teams, matches) {
   const options = [];
-  const addedUsers = new Set(); // سلة مؤقتة عشان نتأكد من عدم تكرار اللاعبين
+  const addedUsers = new Set();
 
   for (const team of teams) {
     if (team.teamId === requesterTeam.teamId) continue;
     if (matches.some((m) => m.status === "finished" && [team.teamId, requesterTeam.teamId].includes(m.team1Id))) continue;
     
     for (const member of team.members) {
-      // إذا اللاعب انضاف مسبقاً للقائمة، تجاهله وكمل
       if (addedUsers.has(member.userId)) continue;
       
-      addedUsers.add(member.userId); // تسجيل اللاعب كـ "مضاف"
+      addedUsers.add(member.userId); 
       
       options.push(
         new StringSelectMenuOptionBuilder()
@@ -1820,27 +1674,26 @@ async function syncMissingMatches(tournamentId) {
   const teams = await LeagueTeam.find({ tournamentId }).lean();
   const matches = await LeagueMatch.find({ tournamentId }).lean();
 
-  const existingMatchPairs = new Set();
+  const matchCounts = new Map();
   
-  // حفظ كل المباريات الحالية عشان ما نكررها
   for (const match of matches) {
     const id1 = match.team1Id;
     const id2 = match.team2Id;
     const key = id1 < id2 ? `${id1}-${id2}` : `${id2}-${id1}`;
-    existingMatchPairs.add(key);
+    matchCounts.set(key, (matchCounts.get(key) || 0) + 1);
   }
 
   const newMatches = [];
   
-  // مقارنة كل فريق مع كل فريق آخر
   for (let i = 0; i < teams.length; i++) {
     for (let j = i + 1; j < teams.length; j++) {
       const id1 = teams[i].teamId;
       const id2 = teams[j].teamId;
       const key = id1 < id2 ? `${id1}-${id2}` : `${id2}-${id1}`;
 
-      // إذا الفريقين ما بينهم مباراة، ننشئ وحدة جديدة
-      if (!existingMatchPairs.has(key)) {
+      const currentCount = matchCounts.get(key) || 0;
+
+      if (currentCount === 0) {
         newMatches.push({
           guildId: teams[0].guildId,
           tournamentId: tournamentId,
@@ -1848,14 +1701,39 @@ async function syncMissingMatches(tournamentId) {
           team1Id: id1,
           team2Id: id2,
           status: "pending",
-          odds: { team1: 1.9, team2: 1.9 },
         });
-        existingMatchPairs.add(key); // نضيفها للسيت عشان ما تتكرر بالغلط
+        newMatches.push({
+          guildId: teams[0].guildId,
+          tournamentId: tournamentId,
+          matchId: makeMatchId(matches.length + newMatches.length),
+          team1Id: id2, 
+          team2Id: id1,
+          status: "pending",
+        });
+        matchCounts.set(key, 2);
+      } 
+      else if (currentCount === 1) {
+        const existingMatch = matches.find(m => 
+          (m.team1Id === id1 && m.team2Id === id2) || 
+          (m.team1Id === id2 && m.team2Id === id1)
+        );
+
+        const awayTeam1 = existingMatch ? existingMatch.team2Id : id2;
+        const awayTeam2 = existingMatch ? existingMatch.team1Id : id1;
+
+        newMatches.push({
+          guildId: teams[0].guildId,
+          tournamentId: tournamentId,
+          matchId: makeMatchId(matches.length + newMatches.length),
+          team1Id: awayTeam1,
+          team2Id: awayTeam2,
+          status: "pending",
+        });
+        matchCounts.set(key, 2);
       }
     }
   }
 
-  // إذا في مباريات جديدة تم إنشاؤها، نحفظها بالمونقو
   if (newMatches.length > 0) {
     await LeagueMatch.insertMany(newMatches);
     return newMatches.length;
@@ -1935,10 +1813,9 @@ function getLeagueGameLink(game) {
 
 function makeParticipant(interaction, tournament = null) {
   const baseName = getInteractionDisplayName(interaction);
-  const repeatCount = (tournament?.participants || []).filter((p) => p.userId === interaction.user.id).length;
   return {
     userId: interaction.user.id,
-    username: `${baseName}${repeatCount ? repeatCount : ""}`,
+    username: baseName,
     avatarURL: interaction.user.displayAvatarURL?.({ extension: "png", size: 128 }) || null,
     joinedAt: new Date(),
   };
@@ -1981,86 +1858,14 @@ function getTeamRank(teams, teamId) {
 function recentForm(teamId, matches) {
   const list = matches
     .filter((m) => m.status === "finished" && (m.team1Id === teamId || m.team2Id === teamId))
-    .sort((a, b) => new Date(b.finishedAt || b.updatedAt || 0) - new Date(a.finishedAt || a.updatedAt || 0))
-    .slice(0, 5)
+    .sort((a, b) => new Date(a.finishedAt || a.updatedAt || 0) - new Date(b.finishedAt || b.updatedAt || 0))
+    .slice(-5)
     .map((match) => {
       if (match.isDraw) return "D";
       return match.winnerTeamId === teamId ? "W" : "L";
     });
   while (list.length < 5) list.push("E");
   return list;
-}
-
-function calculateOdds(team1, team2, matches) {
-  if (!team1.played && !team2.played) return { team1: 1.9, team2: 1.9 };
-  const strength1 = calculateTeamStrength(team1, recentForm(team1.teamId, matches));
-  const strength2 = calculateTeamStrength(team2, recentForm(team2.teamId, matches));
-  const total = Math.max(1, strength1 + strength2);
-  const prob1 = strength1 / total;
-  const prob2 = strength2 / total;
-  return {
-    team1: clamp((1 / prob1) * 0.9, 1.1, 4),
-    team2: clamp((1 / prob2) * 0.9, 1.1, 4),
-  };
-}
-
-function calculateTeamStrength(team, form) {
-  const pointsFactor = Number(team.points || 0) * 4;
-  const winrateFactor = getWinrate(team) * 0.28;
-  const goalFactor = getGoalDiff(team) * 3;
-  const playedConfidence = Math.min(Number(team.played || 0), 6) * 2;
-  const formFactor = form.reduce((sum, item) => {
-    if (item === "W") return sum + 5;
-    if (item === "D") return sum + 2;
-    if (item === "L") return sum - 2;
-    return sum;
-  }, 0);
-  return clamp(28 + pointsFactor + winrateFactor + goalFactor + playedConfidence + formFactor, 10, 140);
-}
-
-async function getBetTotals(matchId) {
-  const bets = await LeagueBet.find({ matchId, status: "pending" }).lean();
-  return bets.reduce((totals, bet) => {
-    if (bet.teamPick === 1) totals.team1 += Number(bet.amount || 0);
-    if (bet.teamPick === 2) totals.team2 += Number(bet.amount || 0);
-    return totals;
-  }, { team1: 0, team2: 0 });
-}
-
-async function getMongoDb() {
-  await waitForMongoose();
-  return mongoose.connection.client.db("discord_casino");
-}
-
-async function getWallet(userId) {
-  const db = await getMongoDb();
-  const user = await db.collection("users").findOne({ userId: String(userId) });
-  return Number(user?.wallet || 0);
-}
-
-async function creditWallet(userId, amount) {
-  const db = await getMongoDb();
-  await db.collection("users").updateOne(
-    { userId: String(userId) },
-    { $inc: { wallet: Math.max(0, Number(amount) || 0) } },
-    { upsert: true }
-  );
-}
-
-async function recordTransaction(doc) {
-  const db = await getMongoDb();
-  await db.collection("transactions").insertOne({
-    userId: String(doc.userId),
-    amount: Number(doc.amount) || 0,
-    reason: String(doc.reason || "عملية دوري"),
-    timestamp: new Date(),
-    type: doc.type || undefined,
-    game: doc.game || "league",
-    guildId: doc.guildId || null,
-    channelId: doc.channelId || null,
-    ref: doc.ref || null,
-    balanceAfter: doc.balanceAfter ?? null,
-  });
 }
 
 async function waitForMongoose(timeoutMs = 15000) {
@@ -2136,12 +1941,6 @@ function statusLabel(status) {
   return labels[status] || status;
 }
 
-function matchResultText(match, viewerTeamId) {
-  if (match.isDraw) return "تعادل";
-  if (match.winnerTeamId === viewerTeamId) return "فوز";
-  return "خسارة";
-}
-
 function getMatchOutcome(match, viewerTeamId) {
   if (match.status !== "finished") return { key: "none", text: "-" };
   if (match.isDraw) return { key: "draw", text: "تعادل" };
@@ -2183,12 +1982,6 @@ function truncateThreadName(text) {
   return truncateOption(String(text || "مباراة دوري").replace(/[^\p{L}\p{N}\s._-]/gu, "").trim(), 90);
 }
 
-function compactDiscordText(text) {
-  const value = String(text || "");
-  if (value.length <= 1900) return value;
-  return `${value.slice(0, 1850)}\n...`;
-}
-
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, Number(value) || min));
 }
@@ -2209,17 +2002,6 @@ function paintBackground(ctx, width, height) {
     ctx.lineTo(x + height, 0);
     ctx.stroke();
   }
-}
-
-function drawStatCard(ctx, x, y, w, h, label, value) {
-  drawPanel(ctx, x, y, w, h, 18, "#102834");
-  ctx.fillStyle = COLORS.muted;
-  ctx.font = "21px Cairo, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText(label, x + w / 2, y + 38);
-  ctx.fillStyle = COLORS.text;
-  ctx.font = "700 29px Cairo, sans-serif";
-  ctx.fillText(value, x + w / 2, y + 78);
 }
 
 function drawPanel(ctx, x, y, w, h, r, color) {
@@ -2270,10 +2052,11 @@ function drawRecentForm(ctx, matches, teamId, centerX, y) {
   const form = recentForm(teamId, matches);
   const colors = { W: COLORS.green, D: COLORS.yellow, L: COLORS.red, E: COLORS.gray };
   const startX = centerX - 48;
-  form.reverse().forEach((item, index) => {
+  
+  form.forEach((item, index) => {
     ctx.fillStyle = colors[item] || COLORS.gray;
     ctx.beginPath();
-    ctx.arc(startX + index * 24, y, 8, 0, Math.PI * 2);
+    ctx.arc(startX + (4 - index) * 24, y, 8, 0, Math.PI * 2);
     ctx.fill();
   });
 }
