@@ -31,6 +31,7 @@ const LEAGUE_GAMES = [
   "حروف مع عزيز",
   "سين جيم",
   "كليك",
+  "فاملي فيود"
 ];
 
 const LEAGUE_GAME_LINKS = {
@@ -40,6 +41,7 @@ const LEAGUE_GAME_LINKS = {
   "حروف مع عزيز": "https://buzzin.live/",
   "سين جيم": "https://seenjeemkw.com/",
   "كليك": "https://kalak.gg/", // ضع الرابط الحقيقي هنا
+  "فاملي فيود": "https://familyvod.com/"
 };
 
 const COLORS = {
